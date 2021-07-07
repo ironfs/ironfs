@@ -296,10 +296,24 @@ impl RamStorage {
     }
 }
 
+const LBA_SIZE: usize = 512;
+
 impl ironfs::Storage for RamStorage {
-    fn read(lba: u32, data: &mut [u8]) {}
-    fn write(lba: u32, data: &[u8]) {}
-    fn erase(lba: u32, num_lba: u32) {}
+    fn read(&self, lba: u32, data: &mut [u8]) {
+        let start_addr = lba as usize * LBA_SIZE;
+        data.clone_from_slice(&self.0[start_addr..start_addr + data.len()]);
+    }
+    fn write(&mut self, lba: u32, data: &[u8]) {
+        let start_addr = lba as usize * LBA_SIZE;
+        self.0[start_addr..start_addr + data.len()].copy_from_slice(data);
+    }
+    fn erase(&mut self, lba: u32, num_lba: u32) {
+        let start_addr = lba as usize * LBA_SIZE;
+        let end_addr = (lba + num_lba) as usize * LBA_SIZE;
+        for i in &mut self.0[start_addr..end_addr] {
+            *i = 0xFF;
+        }
+    }
 }
 
 use structopt::StructOpt;

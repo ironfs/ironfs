@@ -101,9 +101,9 @@ struct FreeBlock {
 }
 
 pub trait Storage {
-    fn read(lba: u32, data: &mut [u8]);
-    fn write(lba: u32, data: &[u8]);
-    fn erase(lba: u32, num_lba: u32);
+    fn read(&self, lba: u32, data: &mut [u8]);
+    fn write(&mut self, lba: u32, data: &[u8]);
+    fn erase(&mut self, lba: u32, num_lba: u32);
 }
 
 pub struct IronFs;
