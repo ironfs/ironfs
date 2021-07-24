@@ -1,4 +1,3 @@
-
 #![no_std]
 
 use zerocopy::{AsBytes, FromBytes};

@@ -4,6 +4,8 @@ use fuser::{
     FUSE_ROOT_ID,
 };
 use ironfs::IronFs;
+use log::LevelFilter;
+use log::{debug, info, warn};
 use std::ffi::OsStr;
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
@@ -20,11 +22,17 @@ impl Filesystem for FuseIronFs {
         Ok(())
     }
 
-    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {}
+    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        debug!("lookup");
+        reply.error(libc::ENOSYS);
+    }
 
     fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {}
 
-    fn getattr(&mut self, _req: &Request, inode: u64, reply: ReplyAttr) {}
+    fn getattr(&mut self, _req: &Request, inode: u64, reply: ReplyAttr) {
+        debug!("getattr");
+        reply.error(libc::ENOSYS);
+    }
 
     fn setattr(
         &mut self,
@@ -44,9 +52,14 @@ impl Filesystem for FuseIronFs {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        debug!("setattr");
+        reply.error(libc::ENOSYS);
     }
 
-    fn readlink(&mut self, _req: &Request, inode: u64, reply: ReplyData) {}
+    fn readlink(&mut self, _req: &Request, inode: u64, reply: ReplyData) {
+        debug!("readlink");
+        reply.error(libc::ENOSYS);
+    }
 
     fn mknod(
         &mut self,
@@ -58,6 +71,8 @@ impl Filesystem for FuseIronFs {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
+        debug!("mknod() called for {:?}", parent);
+        reply.error(libc::ENOSYS);
     }
 
     fn mkdir(
@@ -69,14 +84,22 @@ impl Filesystem for FuseIronFs {
         _umask: u32,
         reply: ReplyEntry,
     ) {
+        debug!("mkdir() called for {:?}", parent);
         //self.mkdir(parent as u32, name);
         // TODO attrs
         //reply.entry(&Duration::new(0, 0),
+        reply.error(libc::ENOSYS);
     }
 
-    fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {}
+    fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        debug!("unlink");
+        reply.error(libc::ENOSYS);
+    }
 
-    fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {}
+    fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        debug!("rmmdir");
+        reply.error(libc::ENOSYS);
+    }
 
     fn symlink(
         &mut self,
@@ -86,6 +109,8 @@ impl Filesystem for FuseIronFs {
         link: &Path,
         reply: ReplyEntry,
     ) {
+        debug!("symlink");
+        reply.error(libc::ENOSYS);
     }
 
     fn rename(
@@ -98,6 +123,8 @@ impl Filesystem for FuseIronFs {
         flags: u32,
         reply: ReplyEmpty,
     ) {
+        debug!("rename");
+        reply.error(libc::ENOSYS);
     }
 
     fn link(
@@ -108,9 +135,14 @@ impl Filesystem for FuseIronFs {
         new_name: &OsStr,
         reply: ReplyEntry,
     ) {
+        debug!("link");
+        reply.error(libc::ENOSYS);
     }
 
-    fn open(&mut self, req: &Request, inode: u64, flags: i32, reply: ReplyOpen) {}
+    fn open(&mut self, req: &Request, inode: u64, flags: i32, reply: ReplyOpen) {
+        debug!("open() called for {:?}", inode);
+        reply.error(libc::ENOSYS);
+    }
 
     fn read(
         &mut self,
@@ -123,6 +155,8 @@ impl Filesystem for FuseIronFs {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
+        debug!("read() called for {:?}", inode);
+        reply.error(libc::ENOSYS);
     }
 
     fn write(
@@ -137,6 +171,8 @@ impl Filesystem for FuseIronFs {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
+        debug!("write() called for {:?}", inode);
+        reply.error(libc::ENOSYS);
     }
 
     fn release(
@@ -149,9 +185,14 @@ impl Filesystem for FuseIronFs {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
+        debug!("release");
+        reply.error(libc::ENOSYS);
     }
 
-    fn opendir(&mut self, req: &Request, inode: u64, flags: i32, reply: ReplyOpen) {}
+    fn opendir(&mut self, req: &Request, inode: u64, flags: i32, reply: ReplyOpen) {
+        debug!("opendir");
+        reply.error(libc::ENOSYS);
+    }
 
     fn readdir(
         &mut self,
@@ -161,6 +202,8 @@ impl Filesystem for FuseIronFs {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
+        debug!("readdir");
+        reply.error(libc::ENOSYS);
     }
 
     fn releasedir(
@@ -171,9 +214,14 @@ impl Filesystem for FuseIronFs {
         _flags: i32,
         reply: ReplyEmpty,
     ) {
+        debug!("releasedir");
+        reply.error(libc::ENOSYS);
     }
 
-    fn statfs(&mut self, _req: &Request, _ino: u64, reply: ReplyStatfs) {}
+    fn statfs(&mut self, _req: &Request, _ino: u64, reply: ReplyStatfs) {
+        debug!("statfs");
+        reply.error(libc::ENOSYS);
+    }
 
     fn setxattr(
         &mut self,
@@ -185,6 +233,8 @@ impl Filesystem for FuseIronFs {
         _position: u32,
         reply: ReplyEmpty,
     ) {
+        debug!("setxattr");
+        reply.error(libc::ENOSYS);
     }
 
     fn getxattr(
@@ -195,13 +245,24 @@ impl Filesystem for FuseIronFs {
         size: u32,
         reply: ReplyXattr,
     ) {
+        debug!("getxattr");
+        reply.error(libc::ENOSYS);
     }
 
-    fn listxattr(&mut self, _req: &Request<'_>, inode: u64, size: u32, reply: ReplyXattr) {}
+    fn listxattr(&mut self, _req: &Request<'_>, inode: u64, size: u32, reply: ReplyXattr) {
+        debug!("listxattr");
+        reply.error(libc::ENOSYS);
+    }
 
-    fn removexattr(&mut self, request: &Request<'_>, inode: u64, key: &OsStr, reply: ReplyEmpty) {}
+    fn removexattr(&mut self, request: &Request<'_>, inode: u64, key: &OsStr, reply: ReplyEmpty) {
+        debug!("removexattr");
+        reply.error(libc::ENOSYS);
+    }
 
-    fn access(&mut self, req: &Request, inode: u64, mask: i32, reply: ReplyEmpty) {}
+    fn access(&mut self, req: &Request, inode: u64, mask: i32, reply: ReplyEmpty) {
+        debug!("access");
+        reply.error(libc::ENOSYS);
+    }
 
     fn create(
         &mut self,
@@ -213,6 +274,8 @@ impl Filesystem for FuseIronFs {
         flags: i32,
         reply: ReplyCreate,
     ) {
+        debug!("create");
+        reply.error(libc::ENOSYS);
     }
 
     #[cfg(target_os = "linux")]
@@ -226,6 +289,8 @@ impl Filesystem for FuseIronFs {
         mode: i32,
         reply: ReplyEmpty,
     ) {
+        debug!("fallocate");
+        reply.error(libc::ENOSYS);
     }
 
     fn copy_file_range(
@@ -241,6 +306,8 @@ impl Filesystem for FuseIronFs {
         _flags: u32,
         reply: ReplyWrite,
     ) {
+        debug!("copy_file_range");
+        reply.error(libc::ENOSYS);
     }
 }
 
@@ -324,6 +391,11 @@ struct Opt {
 }
 
 fn main() {
+    env_logger::builder()
+        .format_timestamp_nanos()
+        .filter_level(LevelFilter::Trace)
+        .init();
+
     let opt = Opt::from_args();
 
     let mut options = vec![MountOption::FSName("fuser".to_string())];
