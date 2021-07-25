@@ -11,7 +11,53 @@ use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+type Inode = u32;
+
+/*
+struct FileAttr {
+    inode: Inode,
+    open_file_handles: u32,
+    size: u32,
+    atime: (i64, u32),
+    mtime: (i64, u32),
+    ctime: (i64, u32),
+    perm: u16,
+    nlink: u32,
+    uid: u32,
+    gid: u32,
+}
+
+impl From<ironfs::FileAttr> for fuser::FileAttr {
+    fn from(attr: FileAttr) -> Self {
+        fuser::FileAttr {
+            ino: attr.inode as u64,
+            size: attr.size as u64,
+            blocks: (attr.size as u64 + BLOCK_SIZE - 1) / BLOCK_SIZE,
+            atime: UNIX_EPOCH + Duration::new(attr.atime.0 as u64, attr.atime.1),
+            mtime: UNIX_EPOCH + Duration::new(attr.mtime.0 as u64, attr.mtime.1),
+            ctime: UNIX_EPOCH + Duration::new(attr.ctime.0 as u64, attr.ctime.1),
+            crtime: SystemTime::UNIX_EPOCH,
+            kind: fuser::FileType::RegularFile,
+            perm: attr.perm,
+            nlink: attr.nlink,
+            uid: attr.uid,
+            gid: attr.gid,
+            rdev: 0,
+            blksize: BLOCK_SIZE as u32,
+            flags: 0,
+        }
+    }
+}
+*/
+
 struct FuseIronFs(IronFs);
+
+fn ironfs_error_to_libc(err_kind: ironfs::ErrorKind) -> i32 {
+    match err_kind {
+        ironfs::ErrorKind::NoEntry => libc::ENOENT,
+        _ => libc::EIO,
+    }
+}
 
 impl Filesystem for FuseIronFs {
     fn init(
@@ -24,7 +70,23 @@ impl Filesystem for FuseIronFs {
 
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         debug!("lookup");
-        reply.error(libc::ENOSYS);
+        let dir_id = ironfs::DirectoryId(parent);
+        match self.0.dirents(&dir_id) {
+            Ok(entries) => {
+                if let Some(entry) = entries.get(name.to_str().unwrap_or("")) {
+                    /*
+                     * TODO
+                    let attrs = self.attrs(entry);
+                    reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
+                    */
+                } else {
+                    reply.error(libc::ENOENT);
+                }
+            }
+            Err(kind) => {
+                    reply.error(libc::ENOENT);
+            }
+        }
     }
 
     fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {}
