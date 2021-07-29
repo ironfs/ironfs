@@ -13,6 +13,8 @@ const FREE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"FREE");
 
 const BLOCK_SIZE: usize = 4096;
 
+const LBA_SIZE: usize = 512;
+
 #[derive(AsBytes, FromBytes)]
 #[repr(C)]
 struct BlockMagic([u8; 4]);
@@ -72,9 +74,9 @@ struct DataBlock {
 
 #[derive(AsBytes, FromBytes)]
 #[repr(C)]
-struct Timestamp {
-    secs: i64,
-    nsecs: u64,
+pub struct Timestamp {
+    pub secs: i64,
+    pub nsecs: u64,
 }
 
 #[derive(AsBytes, FromBytes)]
@@ -118,9 +120,12 @@ pub trait Storage {
     fn erase(&mut self, lba: u32, num_lba: u32);
 }
 
-pub struct IronFs;
+pub struct IronFs<T: Storage> {
+    storage: T,
+}
 
-pub struct DirectoryId(pub u64);
+pub struct DirectoryId(pub u32);
+pub struct FileId(pub u32);
 
 pub struct DirectoryListing;
 
@@ -131,24 +136,62 @@ impl DirectoryListing {
 }
 
 pub enum ErrorKind {
+    NotImplemented,
     NoEntry,
 }
 
-impl IronFs {
-    pub fn new(storage: impl Storage) -> Self {
-        IronFs
+/// Attributes associated with a file.
+pub struct FileAttrs {
+    pub atime: Timestamp,
+    pub mtime: Timestamp,
+    pub ctime: Timestamp,
+    pub owner: u16,
+    pub group: u16,
+    pub perms: u16,
+}
+
+impl<T: Storage> IronFs<T> {
+
+    pub fn new(storage: T) -> Self {
+        IronFs { storage, }
+
     }
 
-    pub fn dirents(&self, dir_id: &DirectoryId) -> Result<DirectoryListing, ErrorKind> {
+    pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<FileId, ErrorKind> {
         Err(ErrorKind::NoEntry)
     }
 
-    pub fn attrs(&self, entry: u32) {
-        // TODO
+    pub fn mkdir(&self, dir_id: &DirectoryId, name: &str) -> Result<DirectoryId, ErrorKind> {
+        Err(ErrorKind::NoEntry)
     }
 
-    pub const fn block_size(&self) -> usize {
+    pub fn attrs(&self, entry: &FileId) -> Result<FileAttrs, ErrorKind> {
+        // TODO
+        match self.read_file_block(entry) {
+            Ok(file) => {
+                Ok(FileAttrs {
+                    atime: file.atime,
+                    mtime: file.mtime,
+                    ctime: file.ctime,
+                    owner: file.owner,
+                    group: file.group,
+                    perms: file.perms,
+                })
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn block_size(&self) -> usize {
         BLOCK_SIZE
+    }
+
+    fn read_file_block(&self, entry: &FileId) -> Result<FileBlock, ErrorKind> {
+        let lba_id = (entry.0 as usize * BLOCK_SIZE) / LBA_SIZE;
+        // TODO
+        //self.read(lba_id, bytes);
+        // Return a FileBlock
+        Err(ErrorKind::NotImplemented)
     }
 }
 

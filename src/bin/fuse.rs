@@ -13,7 +13,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 type Inode = u32;
 
-/*
 struct FileAttr {
     inode: Inode,
     open_file_handles: u32,
@@ -27,7 +26,9 @@ struct FileAttr {
     gid: u32,
 }
 
-impl From<ironfs::FileAttr> for fuser::FileAttr {
+const BLOCK_SIZE: u64 = 4096;
+
+impl From<FileAttr> for fuser::FileAttr {
     fn from(attr: FileAttr) -> Self {
         fuser::FileAttr {
             ino: attr.inode as u64,
@@ -48,9 +49,8 @@ impl From<ironfs::FileAttr> for fuser::FileAttr {
         }
     }
 }
-*/
 
-struct FuseIronFs(IronFs);
+struct FuseIronFs(IronFs<RamStorage>);
 
 fn ironfs_error_to_libc(err_kind: ironfs::ErrorKind) -> i32 {
     match err_kind {
@@ -70,22 +70,31 @@ impl Filesystem for FuseIronFs {
 
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         debug!("lookup");
-        let dir_id = ironfs::DirectoryId(parent);
-        match self.0.dirents(&dir_id) {
-            Ok(entries) => {
-                if let Some(entry) = entries.get(name.to_str().unwrap_or("")) {
-                    /*
-                     * TODO
-                    let attrs = self.attrs(entry);
-                    reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
-                    */
-                } else {
-                    reply.error(libc::ENOENT);
+        let dir_id = ironfs::DirectoryId(parent as u32);
+        if let Ok(entry) = self.0.lookup(&dir_id, name.to_str().unwrap()) {
+            match self.0.attrs(&entry) {
+                Ok(attr) => {
+                    let file_attr = FileAttr {
+                        inode: entry.0,
+                        open_file_handles: 0,
+                        size: 0,
+                        atime: (attr.atime.secs, attr.atime.nsecs as u32),
+                        mtime: (attr.mtime.secs, attr.mtime.nsecs as u32),
+                        ctime: (attr.ctime.secs, attr.ctime.nsecs as u32),
+                        perm: attr.perms,
+                        nlink: 0,
+                        uid: attr.owner as u32,
+                        gid: attr.group as u32,
+                    };
+                reply.entry(&Duration::new(0, 0), &file_attr.into(), 0);
+                },
+                Err(e) => {
+                    unreachable!();
+                    // TODO
                 }
             }
-            Err(kind) => {
-                    reply.error(libc::ENOENT);
-            }
+        } else {
+            reply.error(libc::ENOENT);
         }
     }
 
@@ -147,8 +156,9 @@ impl Filesystem for FuseIronFs {
         reply: ReplyEntry,
     ) {
         debug!("mkdir() called for {:?}", parent);
-        //self.mkdir(parent as u32, name);
-        // TODO attrs
+
+        let dir_id = ironfs::DirectoryId(parent as u32);
+        self.0.mkdir(&dir_id, name.to_str().unwrap());
         //reply.entry(&Duration::new(0, 0),
         reply.error(libc::ENOSYS);
     }
