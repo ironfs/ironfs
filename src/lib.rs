@@ -3,7 +3,7 @@
 use zerocopy::{AsBytes, FromBytes};
 
 const DATA_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DATA");
-const INODE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"INOD");
+const FILE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"INOD");
 const EXT_INODE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"EINO");
 const SUPER_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"SUPR");
 const EXT_SUPER_BLOCK_MAGIC: [u8; 12] = *b" BLK IRON FS";
@@ -15,15 +15,15 @@ const BLOCK_SIZE: usize = 4096;
 
 const LBA_SIZE: usize = 512;
 
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, PartialEq, Clone)]
 #[repr(C)]
 struct BlockMagic([u8; 4]);
 
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, Clone)]
 #[repr(C)]
 struct BlockId(u32);
 
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, Clone)]
 #[repr(C)]
 struct Crc(u32);
 
@@ -71,15 +71,14 @@ struct DataBlock {
     crc: Crc,
 }
 
-
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, Clone)]
 #[repr(C)]
 pub struct Timestamp {
     pub secs: i64,
     pub nsecs: u64,
 }
 
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, Clone)]
 #[repr(C)]
 struct FileBlock {
     magic: BlockMagic,
@@ -138,6 +137,7 @@ impl DirectoryListing {
 pub enum ErrorKind {
     NotImplemented,
     NoEntry,
+    InconsistentState,
 }
 
 /// Attributes associated with a file.
@@ -151,10 +151,8 @@ pub struct FileAttrs {
 }
 
 impl<T: Storage> IronFs<T> {
-
     pub fn new(storage: T) -> Self {
-        IronFs { storage, }
-
+        IronFs { storage }
     }
 
     pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<FileId, ErrorKind> {
@@ -168,16 +166,14 @@ impl<T: Storage> IronFs<T> {
     pub fn attrs(&self, entry: &FileId) -> Result<FileAttrs, ErrorKind> {
         // TODO
         match self.read_file_block(entry) {
-            Ok(file) => {
-                Ok(FileAttrs {
-                    atime: file.atime,
-                    mtime: file.mtime,
-                    ctime: file.ctime,
-                    owner: file.owner,
-                    group: file.group,
-                    perms: file.perms,
-                })
-            },
+            Ok(file) => Ok(FileAttrs {
+                atime: file.atime,
+                mtime: file.mtime,
+                ctime: file.ctime,
+                owner: file.owner,
+                group: file.group,
+                perms: file.perms,
+            }),
             Err(e) => Err(e),
         }
     }
@@ -187,11 +183,21 @@ impl<T: Storage> IronFs<T> {
     }
 
     fn read_file_block(&self, entry: &FileId) -> Result<FileBlock, ErrorKind> {
-        let lba_id = (entry.0 as usize * BLOCK_SIZE) / LBA_SIZE;
+        let lba_id = ((entry.0 as usize * BLOCK_SIZE) / LBA_SIZE) as u32;
+        let mut bytes = [0u8; BLOCK_SIZE];
         // TODO
-        //self.read(lba_id, bytes);
-        // Return a FileBlock
-        Err(ErrorKind::NotImplemented)
+        self.storage.read(lba_id, &mut bytes);
+        use zerocopy::{AsBytes, ByteSlice, ByteSliceMut, FromBytes, LayoutVerified, Unaligned};
+        let file_block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(&bytes[..]);
+        if let Some(file_block) = file_block {
+            if file_block.magic != FILE_BLOCK_MAGIC {
+                return Err(ErrorKind::InconsistentState);
+            }
+
+            return Ok((*file_block).clone());
+        } else {
+            return Err(ErrorKind::InconsistentState);
+        }
     }
 }
 

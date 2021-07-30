@@ -86,8 +86,8 @@ impl Filesystem for FuseIronFs {
                         uid: attr.owner as u32,
                         gid: attr.group as u32,
                     };
-                reply.entry(&Duration::new(0, 0), &file_attr.into(), 0);
-                },
+                    reply.entry(&Duration::new(0, 0), &file_attr.into(), 0);
+                }
                 Err(e) => {
                     unreachable!();
                     // TODO
