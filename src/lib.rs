@@ -2,9 +2,11 @@
 
 use zerocopy::{AsBytes, FromBytes};
 
+const IRONFS_VERSION: u32 = 0;
+
 const DATA_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DATA");
 const FILE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"INOD");
-const EXT_INODE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"EINO");
+const EXT_FILE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"EINO");
 const SUPER_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"SUPR");
 const EXT_SUPER_BLOCK_MAGIC: [u8; 12] = *b" BLK IRON FS";
 const DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DIRB");
@@ -15,6 +17,8 @@ const BLOCK_SIZE: usize = 4096;
 
 const LBA_SIZE: usize = 512;
 
+const NAME_NLEN: usize = 256;
+
 #[derive(AsBytes, FromBytes, PartialEq, Clone)]
 #[repr(C)]
 struct BlockMagic([u8; 4]);
@@ -23,12 +27,16 @@ struct BlockMagic([u8; 4]);
 #[repr(C)]
 struct BlockId(u32);
 
+const BLOCK_ID_NULL: BlockId = BlockId(0xFFFFFFFF);
+
 #[derive(AsBytes, FromBytes, Clone)]
 #[repr(C)]
 struct Crc(u32);
 
+const CRC_INIT: Crc = Crc(0x00000000);
+
 #[derive(AsBytes, FromBytes)]
-#[repr(C)]
+#[repr(packed)]
 struct SuperBlock {
     magic: BlockMagic,
     ext_magic: [u8; 12],
@@ -36,16 +44,16 @@ struct SuperBlock {
     root_dir_block: BlockId,
     num_blocks: u32,
     block_size: u32,
-    created_on: u32,
+    created_on: Timestamp,
     crc: Crc,
 }
 
-#[derive(AsBytes, FromBytes)]
-#[repr(C)]
+#[derive(AsBytes, FromBytes, Clone)]
+#[repr(packed)]
 struct DirBlock {
     magic: BlockMagic,
     next_dir_block: BlockId,
-    name: [u8; 256],
+    name: [u8; NAME_NLEN],
     owner: u16,
     group: u16,
     perms: u16,
@@ -55,7 +63,7 @@ struct DirBlock {
 }
 
 #[derive(AsBytes, FromBytes)]
-#[repr(C)]
+#[repr(packed)]
 struct ExtDirBlock {
     magic: BlockMagic,
     next_dir_block: BlockId,
@@ -64,7 +72,7 @@ struct ExtDirBlock {
 }
 
 #[derive(AsBytes, FromBytes)]
-#[repr(C)]
+#[repr(packed)]
 struct DataBlock {
     magic: BlockMagic,
     data: [u8; 4088],
@@ -72,18 +80,18 @@ struct DataBlock {
 }
 
 #[derive(AsBytes, FromBytes, Clone)]
-#[repr(C)]
+#[repr(packed)]
 pub struct Timestamp {
     pub secs: i64,
     pub nsecs: u64,
 }
 
 #[derive(AsBytes, FromBytes, Clone)]
-#[repr(C)]
+#[repr(packed)]
 struct FileBlock {
     magic: BlockMagic,
     next_inode: BlockId,
-    name: [u8; 256],
+    name: [u8; NAME_NLEN],
     atime: Timestamp,
     mtime: Timestamp,
     ctime: Timestamp,
@@ -97,7 +105,7 @@ struct FileBlock {
 }
 
 #[derive(AsBytes, FromBytes)]
-#[repr(C)]
+#[repr(packed)]
 struct ExtFileBlock {
     magic: BlockMagic,
     next_inode: BlockId,
@@ -106,7 +114,7 @@ struct ExtFileBlock {
 }
 
 #[derive(AsBytes, FromBytes)]
-#[repr(C)]
+#[repr(packed)]
 struct FreeBlock {
     magic: BlockMagic,
     next_free: BlockId,
@@ -155,6 +163,39 @@ impl<T: Storage> IronFs<T> {
         IronFs { storage }
     }
 
+    pub fn format(&mut self, num_blocks: u32) {
+        // Write out the initial settings for the super block.
+        let mut super_block = SuperBlock {
+            magic: SUPER_BLOCK_MAGIC,
+            ext_magic: EXT_SUPER_BLOCK_MAGIC,
+            version: IRONFS_VERSION,
+            root_dir_block: BlockId(1),
+            num_blocks,
+            block_size: BLOCK_SIZE as u32,
+            // TODO
+            created_on: Timestamp { secs: 0, nsecs: 0 },
+            crc: CRC_INIT,
+        };
+        const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
+        super_block.crc = Crc(CRC.checksum(super_block.as_bytes()));
+        self.write_super_block(&super_block);
+
+        // Write the initial settings for the directory block.
+        let mut dir_block = DirBlock {
+            magic: DIR_BLOCK_MAGIC,
+            next_dir_block: BLOCK_ID_NULL,
+            name: [0u8; NAME_NLEN],
+            owner: 0,
+            group: 0,
+            perms: 0,
+            reserved: 0,
+            content_blocks: [BLOCK_ID_NULL; 955],
+            crc: CRC_INIT,
+        };
+        dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
+        self.write_dir_block(DirectoryId(1), &dir_block);
+    }
+
     pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<FileId, ErrorKind> {
         Err(ErrorKind::NoEntry)
     }
@@ -182,10 +223,30 @@ impl<T: Storage> IronFs<T> {
         BLOCK_SIZE
     }
 
-    fn read_file_block(&self, entry: &FileId) -> Result<FileBlock, ErrorKind> {
-        let lba_id = ((entry.0 as usize * BLOCK_SIZE) / LBA_SIZE) as u32;
+    fn id_to_lba(&self, id: u32) -> usize {
+        (id as usize * self.block_size()) / LBA_SIZE
+    }
+
+    fn read_dir_block(&self, entry: &DirectoryId) -> Result<DirBlock, ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0) as u32;
         let mut bytes = [0u8; BLOCK_SIZE];
-        // TODO
+        self.storage.read(lba_id, &mut bytes);
+        use zerocopy::{AsBytes, ByteSlice, ByteSliceMut, FromBytes, LayoutVerified, Unaligned};
+        let block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(&bytes[..]);
+        if let Some(block) = block {
+            if block.magic != DIR_BLOCK_MAGIC {
+                return Err(ErrorKind::InconsistentState);
+            }
+
+            return Ok((*block).clone());
+        } else {
+            return Err(ErrorKind::InconsistentState);
+        }
+    }
+
+    fn read_file_block(&self, entry: &FileId) -> Result<FileBlock, ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0) as u32;
+        let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(lba_id, &mut bytes);
         use zerocopy::{AsBytes, ByteSlice, ByteSliceMut, FromBytes, LayoutVerified, Unaligned};
         let file_block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(&bytes[..]);
@@ -198,6 +259,23 @@ impl<T: Storage> IronFs<T> {
         } else {
             return Err(ErrorKind::InconsistentState);
         }
+    }
+
+    fn write_super_block(&mut self, super_block: &SuperBlock) -> Result<(), ErrorKind> {
+        let bytes = super_block.as_bytes();
+        self.storage.write(0, &bytes);
+        Ok(())
+    }
+
+    fn write_dir_block(
+        &mut self,
+        entry: DirectoryId,
+        directory: &DirBlock,
+    ) -> Result<(), ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0) as u32;
+        let bytes = directory.as_bytes();
+        self.storage.write(lba_id, &bytes);
+        Ok(())
     }
 }
 
