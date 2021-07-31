@@ -162,6 +162,8 @@ pub struct FileAttrs {
     pub perms: u16,
 }
 
+const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
+
 impl<T: Storage> IronFs<T> {
     pub fn new(storage: T) -> Self {
         let mut ironfs = IronFs {
@@ -200,7 +202,6 @@ impl<T: Storage> IronFs<T> {
             created_on: Timestamp { secs: 0, nsecs: 0 },
             crc: CRC_INIT,
         };
-        const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
         super_block.crc = Crc(CRC.checksum(super_block.as_bytes()));
         self.write_super_block(&super_block);
 
@@ -217,7 +218,7 @@ impl<T: Storage> IronFs<T> {
             crc: CRC_INIT,
         };
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
-        self.write_dir_block(DirectoryId(1), &dir_block);
+        self.write_dir_block(&DirectoryId(1), &dir_block);
     }
 
     pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<FileId, ErrorKind> {
@@ -225,7 +226,6 @@ impl<T: Storage> IronFs<T> {
     }
 
     pub fn mkdir(&mut self, dir_id: &DirectoryId, name: &str) -> Result<DirectoryId, ErrorKind> {
-        // TODO
         let mut existing_directory = self.read_dir_block(dir_id)?;
         // Find existing slot for new directory to be added.
         if let Some(v) = existing_directory
@@ -234,7 +234,7 @@ impl<T: Storage> IronFs<T> {
             .find(|v| **v == BLOCK_ID_NULL)
         {
             let id = self.alloc_next_free_block()?;
-            let directory_block = DirBlock {
+            let mut new_directory_block = DirBlock {
                 magic: DIR_BLOCK_MAGIC,
                 next_dir_block: BLOCK_ID_NULL,
                 name: [0u8; NAME_NLEN],
@@ -245,10 +245,12 @@ impl<T: Storage> IronFs<T> {
                 content_blocks: [BLOCK_ID_NULL; 955],
                 crc: CRC_INIT,
             };
-            *v = BlockId(0);
-            self.write_dir_block(DirectoryId(id.0), &directory_block)?;
-            // TODO write new dir block.
-            //self.write_dir_block(di
+            let new_directory_block_id = DirectoryId(id.0);
+            Self::fix_dir_block_crc(&mut new_directory_block);
+            self.write_dir_block(&new_directory_block_id, &new_directory_block)?;
+            *v = BlockId(id.0);
+            Self::fix_dir_block_crc(&mut existing_directory);
+            self.write_dir_block(&dir_id, &existing_directory)?;
         } else {
             // TODO handle creating a new ext directory.
             unreachable!();
@@ -333,9 +335,24 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
+    fn fix_free_block_crc(free_block: &mut FreeBlock) {
+        free_block.crc = CRC_INIT;
+        free_block.crc = Crc(CRC.checksum(free_block.as_bytes()));
+    }
+
+    fn fix_dir_block_crc(dir_block: &mut DirBlock) {
+        dir_block.crc = CRC_INIT;
+        dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
+    }
+
+    fn fix_file_block_crc(file_block: &mut FileBlock) {
+        file_block.crc = CRC_INIT;
+        file_block.crc = Crc(CRC.checksum(file_block.as_bytes()));
+    }
+
     fn write_dir_block(
         &mut self,
-        entry: DirectoryId,
+        entry: &DirectoryId,
         directory: &DirBlock,
     ) -> Result<(), ErrorKind> {
         let lba_id = self.id_to_lba(entry.0) as u32;
@@ -379,12 +396,16 @@ impl<T: Storage> IronFs<T> {
         let free_block_id = self.next_free_block_id;
         let free_block = self.read_free_block(&free_block_id)?;
         self.next_free_block_id = free_block.next_free_id;
-        let mut next_free_block = self.read_free_block(&free_block.next_free_id)?;
+
         let mut prev_free_block = self.read_free_block(&free_block.prev_free_id)?;
+        let mut next_free_block = self.read_free_block(&free_block.next_free_id)?;
         prev_free_block.next_free_id = free_block.next_free_id;
         next_free_block.prev_free_id = free_block.prev_free_id;
+        Self::fix_free_block_crc(&mut prev_free_block);
+        Self::fix_free_block_crc(&mut next_free_block);
         self.write_free_block(&free_block.prev_free_id, &prev_free_block)?;
         self.write_free_block(&free_block.next_free_id, &next_free_block)?;
+
         Ok(free_block_id)
     }
 }

@@ -158,6 +158,7 @@ impl Filesystem for FuseIronFs {
         debug!("mkdir() called for {:?}", parent);
 
         let dir_id = ironfs::DirectoryId(parent as u32);
+        // TODO
         self.0.mkdir(&dir_id, name.to_str().unwrap());
         //reply.entry(&Duration::new(0, 0),
         reply.error(libc::ENOSYS);
