@@ -454,6 +454,13 @@ impl ironfs::Storage for RamStorage {
             *i = 0xFF;
         }
     }
+
+    fn geometry(&self) -> ironfs::Geometry {
+        ironfs::Geometry {
+            lba_size: 512,
+            num_blocks: self.0.capacity() / 512,
+        }
+    }
 }
 
 use structopt::StructOpt;
@@ -473,7 +480,14 @@ fn main() {
 
     let mut options = vec![MountOption::FSName("fuser".to_string())];
 
-    let storage = RamStorage::new(33554432);
-    let ironfs = IronFs::new(storage);
+    //let storage = RamStorage::new(33554432);
+    let mut ironfs = IronFs::from(RamStorage::new(33554432));
+    match ironfs.bind() {
+        Err(ironfs::ErrorKind::NotFormatted) => {
+            ironfs.format().expect("Failure to format ironfs.");
+            ironfs.bind().expect("Failure to bind after format.");
+        }
+        _ => {}
+    };
     fuser::mount2(FuseIronFs(ironfs), opt.mount_point, &options).unwrap();
 }

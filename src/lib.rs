@@ -122,10 +122,16 @@ struct FreeBlock {
     crc: Crc,
 }
 
+pub struct Geometry {
+    pub lba_size: usize,
+    pub num_blocks: usize,
+}
+
 pub trait Storage {
     fn read(&self, lba: u32, data: &mut [u8]);
     fn write(&mut self, lba: u32, data: &[u8]);
     fn erase(&mut self, lba: u32, num_lba: u32);
+    fn geometry(&self) -> Geometry;
 }
 
 pub struct IronFs<T: Storage> {
@@ -145,11 +151,13 @@ impl DirectoryListing {
     }
 }
 
+#[derive(Debug)]
 pub enum ErrorKind {
     NotImplemented,
     NoEntry,
     InconsistentState,
     OutOfSpace,
+    NotFormatted,
 }
 
 /// Attributes associated with a file.
@@ -165,20 +173,27 @@ pub struct FileAttrs {
 const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
 
 impl<T: Storage> IronFs<T> {
-    pub fn new(storage: T) -> Self {
-        let mut ironfs = IronFs {
+    pub fn from(storage: T) -> Self {
+        IronFs {
             storage,
             next_free_block_id: BLOCK_ID_NULL,
             is_formatted: false,
-        };
-        if let Some(super_block) = ironfs.read_super_block().ok() {
-            ironfs.is_formatted = true;
+        }
+    }
+
+    pub fn bind(&mut self) -> Result<(), ErrorKind> {
+        if let Some(super_block) = self.read_super_block().ok() {
+            if super_block.magic != SUPER_BLOCK_MAGIC {
+                return Err(ErrorKind::NotFormatted);
+            }
+            self.is_formatted = true;
+
             // Hunt for the first free_block.
             for i in 1..super_block.num_blocks {
                 let block_id = BlockId(i);
-                match ironfs.read_free_block(&block_id) {
+                match self.read_free_block(&block_id) {
                     Ok(_) => {
-                        ironfs.next_free_block_id = block_id;
+                        self.next_free_block_id = block_id;
                         break;
                     }
                     Err(_) => {}
@@ -186,10 +201,13 @@ impl<T: Storage> IronFs<T> {
             }
         }
 
-        ironfs
+        Ok(())
     }
 
-    pub fn format(&mut self, num_blocks: u32) {
+    pub fn format(&mut self) -> Result<(), ErrorKind> {
+        let geometry = self.storage.geometry();
+        let num_blocks = geometry.num_blocks as u32;
+
         // Write out the initial settings for the super block.
         let mut super_block = SuperBlock {
             magic: SUPER_BLOCK_MAGIC,
@@ -233,7 +251,14 @@ impl<T: Storage> IronFs<T> {
             };
         }
         self.next_free_block_id = BlockId(2);
+
+        Ok(())
     }
+
+    /*
+    pub fn format(&mut self, num_blocks: u32) {
+    }
+    */
 
     pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<FileId, ErrorKind> {
         Err(ErrorKind::NoEntry)
