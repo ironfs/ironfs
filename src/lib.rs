@@ -1,6 +1,6 @@
 #![no_std]
 
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
 
@@ -23,7 +23,7 @@ const NAME_NLEN: usize = 256;
 #[repr(C)]
 struct BlockMagic([u8; 4]);
 
-#[derive(AsBytes, FromBytes, Clone)]
+#[derive(AsBytes, FromBytes, Clone, Copy, PartialEq)]
 #[repr(C)]
 struct BlockId(u32);
 
@@ -35,7 +35,7 @@ struct Crc(u32);
 
 const CRC_INIT: Crc = Crc(0x00000000);
 
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct SuperBlock {
     magic: BlockMagic,
@@ -113,11 +113,12 @@ struct ExtFileBlock {
     crc: Crc,
 }
 
-#[derive(AsBytes, FromBytes)]
+#[derive(AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct FreeBlock {
     magic: BlockMagic,
-    next_free: BlockId,
+    next_free_id: BlockId,
+    prev_free_id: BlockId,
     crc: Crc,
 }
 
@@ -129,6 +130,8 @@ pub trait Storage {
 
 pub struct IronFs<T: Storage> {
     storage: T,
+    next_free_block_id: BlockId,
+    is_formatted: bool,
 }
 
 pub struct DirectoryId(pub u32);
@@ -146,6 +149,7 @@ pub enum ErrorKind {
     NotImplemented,
     NoEntry,
     InconsistentState,
+    OutOfSpace,
 }
 
 /// Attributes associated with a file.
@@ -160,7 +164,27 @@ pub struct FileAttrs {
 
 impl<T: Storage> IronFs<T> {
     pub fn new(storage: T) -> Self {
-        IronFs { storage }
+        let mut ironfs = IronFs {
+            storage,
+            next_free_block_id: BLOCK_ID_NULL,
+            is_formatted: false,
+        };
+        if let Some(super_block) = ironfs.read_super_block().ok() {
+            ironfs.is_formatted = true;
+            // Hunt for the first free_block.
+            for i in 1..super_block.num_blocks {
+                let block_id = BlockId(i);
+                match ironfs.read_free_block(&block_id) {
+                    Ok(_) => {
+                        ironfs.next_free_block_id = block_id;
+                        break;
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+
+        ironfs
     }
 
     pub fn format(&mut self, num_blocks: u32) {
@@ -200,12 +224,41 @@ impl<T: Storage> IronFs<T> {
         Err(ErrorKind::NoEntry)
     }
 
-    pub fn mkdir(&self, dir_id: &DirectoryId, name: &str) -> Result<DirectoryId, ErrorKind> {
+    pub fn mkdir(&mut self, dir_id: &DirectoryId, name: &str) -> Result<DirectoryId, ErrorKind> {
+        // TODO
+        let mut existing_directory = self.read_dir_block(dir_id)?;
+        // Find existing slot for new directory to be added.
+        if let Some(v) = existing_directory
+            .content_blocks
+            .iter_mut()
+            .find(|v| **v == BLOCK_ID_NULL)
+        {
+            let id = self.alloc_next_free_block()?;
+            let directory_block = DirBlock {
+                magic: DIR_BLOCK_MAGIC,
+                next_dir_block: BLOCK_ID_NULL,
+                name: [0u8; NAME_NLEN],
+                owner: 0,
+                group: 0,
+                perms: 0,
+                reserved: 0,
+                content_blocks: [BLOCK_ID_NULL; 955],
+                crc: CRC_INIT,
+            };
+            *v = BlockId(0);
+            self.write_dir_block(DirectoryId(id.0), &directory_block)?;
+            // TODO write new dir block.
+            //self.write_dir_block(di
+        } else {
+            // TODO handle creating a new ext directory.
+            unreachable!();
+        }
+        //if let Some(i, _) = existing_directory.content_blocks.iter().enumerate().any(|(i, v)| v == BLOCK_ID_NULL) { }
+
         Err(ErrorKind::NoEntry)
     }
 
     pub fn attrs(&self, entry: &FileId) -> Result<FileAttrs, ErrorKind> {
-        // TODO
         match self.read_file_block(entry) {
             Ok(file) => Ok(FileAttrs {
                 atime: file.atime,
@@ -231,7 +284,6 @@ impl<T: Storage> IronFs<T> {
         let lba_id = self.id_to_lba(entry.0) as u32;
         let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(lba_id, &mut bytes);
-        use zerocopy::{AsBytes, ByteSlice, ByteSliceMut, FromBytes, LayoutVerified, Unaligned};
         let block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(&bytes[..]);
         if let Some(block) = block {
             if block.magic != DIR_BLOCK_MAGIC {
@@ -248,7 +300,6 @@ impl<T: Storage> IronFs<T> {
         let lba_id = self.id_to_lba(entry.0) as u32;
         let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(lba_id, &mut bytes);
-        use zerocopy::{AsBytes, ByteSlice, ByteSliceMut, FromBytes, LayoutVerified, Unaligned};
         let file_block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(&bytes[..]);
         if let Some(file_block) = file_block {
             if file_block.magic != FILE_BLOCK_MAGIC {
@@ -256,6 +307,21 @@ impl<T: Storage> IronFs<T> {
             }
 
             return Ok((*file_block).clone());
+        } else {
+            return Err(ErrorKind::InconsistentState);
+        }
+    }
+
+    fn read_super_block(&mut self) -> Result<SuperBlock, ErrorKind> {
+        let mut bytes = [0u8; BLOCK_SIZE];
+        self.storage.read(0, &mut bytes);
+        let block: Option<LayoutVerified<_, SuperBlock>> = LayoutVerified::new(&bytes[..]);
+        if let Some(block) = block {
+            if block.magic != SUPER_BLOCK_MAGIC {
+                return Err(ErrorKind::InconsistentState);
+            }
+
+            return Ok((*block).clone());
         } else {
             return Err(ErrorKind::InconsistentState);
         }
@@ -276,6 +342,50 @@ impl<T: Storage> IronFs<T> {
         let bytes = directory.as_bytes();
         self.storage.write(lba_id, &bytes);
         Ok(())
+    }
+
+    fn read_free_block(&self, free_block_id: &BlockId) -> Result<FreeBlock, ErrorKind> {
+        let lba_id = self.id_to_lba(free_block_id.0) as u32;
+        let mut bytes = [0u8; BLOCK_SIZE];
+        self.storage.read(lba_id, &mut bytes);
+        let block: Option<LayoutVerified<_, FreeBlock>> = LayoutVerified::new(&bytes[..]);
+        if let Some(block) = block {
+            if block.magic != FREE_BLOCK_MAGIC {
+                return Err(ErrorKind::InconsistentState);
+            }
+
+            return Ok((*block).clone());
+        } else {
+            return Err(ErrorKind::InconsistentState);
+        }
+    }
+
+    fn write_free_block(
+        &mut self,
+        free_block_id: &BlockId,
+        free_block: &FreeBlock,
+    ) -> Result<(), ErrorKind> {
+        let lba_id = self.id_to_lba(free_block_id.0) as u32;
+        let bytes = free_block.as_bytes();
+        self.storage.write(lba_id, &bytes);
+        Ok(())
+    }
+
+    fn alloc_next_free_block(&mut self) -> Result<BlockId, ErrorKind> {
+        if self.next_free_block_id == BLOCK_ID_NULL {
+            return Err(ErrorKind::OutOfSpace);
+        }
+
+        let free_block_id = self.next_free_block_id;
+        let free_block = self.read_free_block(&free_block_id)?;
+        self.next_free_block_id = free_block.next_free_id;
+        let mut next_free_block = self.read_free_block(&free_block.next_free_id)?;
+        let mut prev_free_block = self.read_free_block(&free_block.prev_free_id)?;
+        prev_free_block.next_free_id = free_block.next_free_id;
+        next_free_block.prev_free_id = free_block.prev_free_id;
+        self.write_free_block(&free_block.prev_free_id, &prev_free_block)?;
+        self.write_free_block(&free_block.next_free_id, &next_free_block)?;
+        Ok(free_block_id)
     }
 }
 
