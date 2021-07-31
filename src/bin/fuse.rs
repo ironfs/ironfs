@@ -432,7 +432,7 @@ struct RamStorage(Vec<u8>);
 
 impl RamStorage {
     fn new(nbytes: usize) -> Self {
-        RamStorage(Vec::with_capacity(nbytes))
+        RamStorage(vec![0u8; nbytes])
     }
 }
 
@@ -458,7 +458,7 @@ impl ironfs::Storage for RamStorage {
     fn geometry(&self) -> ironfs::Geometry {
         ironfs::Geometry {
             lba_size: 512,
-            num_blocks: self.0.capacity() / 512,
+            num_blocks: self.0.len() / 512,
         }
     }
 }
@@ -482,9 +482,12 @@ fn main() {
 
     //let storage = RamStorage::new(33554432);
     let mut ironfs = IronFs::from(RamStorage::new(33554432));
+    debug!("First bind");
     match ironfs.bind() {
         Err(ironfs::ErrorKind::NotFormatted) => {
+            debug!("Formatting.");
             ironfs.format().expect("Failure to format ironfs.");
+            debug!("Binding.");
             ironfs.bind().expect("Failure to bind after format.");
         }
         _ => {}

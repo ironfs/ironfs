@@ -1,5 +1,6 @@
 #![no_std]
 
+use log::{debug, info, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
@@ -184,6 +185,7 @@ impl<T: Storage> IronFs<T> {
     pub fn bind(&mut self) -> Result<(), ErrorKind> {
         if let Some(super_block) = self.read_super_block().ok() {
             if super_block.magic != SUPER_BLOCK_MAGIC {
+                debug!("super block had wrong magic.");
                 return Err(ErrorKind::NotFormatted);
             }
             self.is_formatted = true;
@@ -199,6 +201,9 @@ impl<T: Storage> IronFs<T> {
                     Err(_) => {}
                 }
             }
+        } else {
+            debug!("failure to read super block");
+            return Err(ErrorKind::NotFormatted);
         }
 
         Ok(())
@@ -206,7 +211,8 @@ impl<T: Storage> IronFs<T> {
 
     pub fn format(&mut self) -> Result<(), ErrorKind> {
         let geometry = self.storage.geometry();
-        let num_blocks = geometry.num_blocks as u32;
+        let num_blocks = ((geometry.lba_size * geometry.num_blocks) / BLOCK_SIZE) as u32;
+        debug!("num blocks is: {}", num_blocks);
 
         // Write out the initial settings for the super block.
         let mut super_block = SuperBlock {
@@ -221,7 +227,7 @@ impl<T: Storage> IronFs<T> {
             crc: CRC_INIT,
         };
         super_block.crc = Crc(CRC.checksum(super_block.as_bytes()));
-        self.write_super_block(&super_block);
+        self.write_super_block(&super_block)?;
 
         // Write the initial settings for the directory block.
         let mut dir_block = DirBlock {
@@ -356,14 +362,17 @@ impl<T: Storage> IronFs<T> {
     fn read_super_block(&mut self) -> Result<SuperBlock, ErrorKind> {
         let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(0, &mut bytes);
-        let block: Option<LayoutVerified<_, SuperBlock>> = LayoutVerified::new(&bytes[..]);
-        if let Some(block) = block {
+        let block: Option<(LayoutVerified<_, SuperBlock>, &[u8])> =
+            LayoutVerified::new_from_prefix(&bytes[..]);
+        if let Some((block, _)) = block {
             if block.magic != SUPER_BLOCK_MAGIC {
+                debug!("Failed to read proper super block magic.");
                 return Err(ErrorKind::InconsistentState);
             }
 
             return Ok((*block).clone());
         } else {
+            debug!("Failed to create verified layout of superblock");
             return Err(ErrorKind::InconsistentState);
         }
     }
