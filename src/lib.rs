@@ -219,6 +219,20 @@ impl<T: Storage> IronFs<T> {
         };
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
         self.write_dir_block(&DirectoryId(1), &dir_block);
+
+        for i in 2..num_blocks {
+            let prev_block_id = if i == 2 {
+                BlockId(num_blocks - 1)
+            } else {
+                BlockId(i - 1)
+            };
+            let next_block_id = if i == (num_blocks - 1) {
+                BlockId(2)
+            } else {
+                BlockId(i + 1)
+            };
+        }
+        self.next_free_block_id = BlockId(2);
     }
 
     pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<FileId, ErrorKind> {
@@ -233,7 +247,7 @@ impl<T: Storage> IronFs<T> {
             .iter_mut()
             .find(|v| **v == BLOCK_ID_NULL)
         {
-            let id = self.alloc_next_free_block()?;
+            let id = self.acquire_free_block()?;
             let mut new_directory_block = DirBlock {
                 magic: DIR_BLOCK_MAGIC,
                 next_dir_block: BLOCK_ID_NULL,
@@ -388,7 +402,7 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
-    fn alloc_next_free_block(&mut self) -> Result<BlockId, ErrorKind> {
+    fn acquire_free_block(&mut self) -> Result<BlockId, ErrorKind> {
         if self.next_free_block_id == BLOCK_ID_NULL {
             return Err(ErrorKind::OutOfSpace);
         }
@@ -407,6 +421,35 @@ impl<T: Storage> IronFs<T> {
         self.write_free_block(&free_block.next_free_id, &next_free_block)?;
 
         Ok(free_block_id)
+    }
+
+    fn release_free_block(&mut self, cur_free_block_id: BlockId) -> Result<(), ErrorKind> {
+        if cur_free_block_id == BLOCK_ID_NULL {
+            return Err(ErrorKind::InconsistentState);
+        }
+
+        let next_free_block_id = self.next_free_block_id;
+        let mut next_free_block = self.read_free_block(&next_free_block_id)?;
+        let prev_free_block_id = next_free_block.prev_free_id;
+        let mut prev_free_block = self.read_free_block(&prev_free_block_id)?;
+
+        let mut cur_free_block = FreeBlock {
+            magic: FREE_BLOCK_MAGIC,
+            next_free_id: next_free_block_id,
+            prev_free_id: prev_free_block_id,
+            crc: CRC_INIT,
+        };
+
+        next_free_block.prev_free_id = cur_free_block_id;
+        prev_free_block.next_free_id = cur_free_block_id;
+        Self::fix_free_block_crc(&mut prev_free_block);
+        Self::fix_free_block_crc(&mut cur_free_block);
+        Self::fix_free_block_crc(&mut next_free_block);
+        self.write_free_block(&prev_free_block_id, &prev_free_block)?;
+        self.write_free_block(&cur_free_block_id, &cur_free_block)?;
+        self.write_free_block(&next_free_block_id, &next_free_block)?;
+
+        Ok(())
     }
 }
 
