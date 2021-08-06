@@ -69,7 +69,7 @@ impl Filesystem for FuseIronFs {
     }
 
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        debug!("lookup");
+        debug!("lookup parent: {}", parent);
         let dir_id = ironfs::DirectoryId(parent as u32);
         if let Ok(entry) = self.0.lookup(&dir_id, name.to_str().unwrap()) {
             match self.0.attrs(&entry) {
@@ -160,8 +160,26 @@ impl Filesystem for FuseIronFs {
         let dir_id = ironfs::DirectoryId(parent as u32);
         // TODO
         self.0.mkdir(&dir_id, name.to_str().unwrap());
-        //reply.entry(&Duration::new(0, 0),
-        reply.error(libc::ENOSYS);
+
+        let attr = fuser::FileAttr {
+            ino: dir_id.0 as u64,
+            size: BLOCK_SIZE,
+            blocks: 1,
+            atime: UNIX_EPOCH + Duration::new(0, 0),
+            mtime: UNIX_EPOCH + Duration::new(0, 0),
+            ctime: UNIX_EPOCH + Duration::new(0, 0),
+            crtime: SystemTime::UNIX_EPOCH,
+            kind: fuser::FileType::Directory,
+            perm: 0,
+            nlink: 2,
+            uid: 0,
+            gid: 0,
+            rdev: 0,
+            blksize: BLOCK_SIZE as u32,
+            flags: 0,
+        };
+        reply.entry(&Duration::new(0, 0), &attr, 0);
+        //reply.error(libc::ENOSYS);
     }
 
     fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {

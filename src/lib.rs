@@ -1,6 +1,6 @@
 #![no_std]
 
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
@@ -20,13 +20,24 @@ const LBA_SIZE: usize = 512;
 
 const NAME_NLEN: usize = 256;
 
-#[derive(AsBytes, FromBytes, PartialEq, Clone)]
+/// Representation of the different types of blocks in the filesystem.
+enum BlockMagicType {
+    DataBlock,
+    FileBlock,
+    ExtFileBlock,
+    SuperBlock,
+    DirBlock,
+    ExtDirBlock,
+    FreeBlock,
+}
+
+#[derive(AsBytes, FromBytes, PartialEq, Eq, Clone)]
 #[repr(C)]
 struct BlockMagic([u8; 4]);
 
 #[derive(AsBytes, FromBytes, Clone, Copy, PartialEq)]
 #[repr(C)]
-struct BlockId(u32);
+pub struct BlockId(pub u32);
 
 const BLOCK_ID_NULL: BlockId = BlockId(0xFFFFFFFF);
 
@@ -38,46 +49,68 @@ const CRC_INIT: Crc = Crc(0x00000000);
 
 #[derive(AsBytes, FromBytes, Clone)]
 #[repr(packed)]
+struct GenericBlock {
+    magic: BlockMagic,
+    crc: Crc,
+}
+
+#[derive(AsBytes, FromBytes, Clone)]
+#[repr(packed)]
 struct SuperBlock {
     magic: BlockMagic,
+    crc: Crc,
     ext_magic: [u8; 12],
     version: u32,
     root_dir_block: BlockId,
     num_blocks: u32,
     block_size: u32,
     created_on: Timestamp,
-    crc: Crc,
 }
 
 #[derive(AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct DirBlock {
     magic: BlockMagic,
+    crc: Crc,
     next_dir_block: BlockId,
+    name_len: u32,
     name: [u8; NAME_NLEN],
+    atime: Timestamp,
+    mtime: Timestamp,
+    ctime: Timestamp,
     owner: u16,
     group: u16,
     perms: u16,
     reserved: u16,
-    content_blocks: [BlockId; 955],
-    crc: Crc,
+    content_blocks: [BlockId; 948],
+}
+
+impl DirBlock {
+    fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
+        let block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(bytes);
+        if let Some(block) = block {
+            return Ok((*block).clone());
+        }
+
+        return Err(ErrorKind::InconsistentState);
+    }
 }
 
 #[derive(AsBytes, FromBytes)]
 #[repr(packed)]
 struct ExtDirBlock {
     magic: BlockMagic,
+    crc: Crc,
     next_dir_block: BlockId,
     data: [BlockId; 1021],
-    crc: Crc,
 }
 
 #[derive(AsBytes, FromBytes)]
 #[repr(packed)]
 struct DataBlock {
     magic: BlockMagic,
-    data: [u8; 4088],
     crc: Crc,
+    data: [u8; 4088],
 }
 
 #[derive(AsBytes, FromBytes, Clone)]
@@ -91,7 +124,9 @@ pub struct Timestamp {
 #[repr(packed)]
 struct FileBlock {
     magic: BlockMagic,
+    crc: Crc,
     next_inode: BlockId,
+    name_len: u32,
     name: [u8; NAME_NLEN],
     atime: Timestamp,
     mtime: Timestamp,
@@ -101,26 +136,36 @@ struct FileBlock {
     perms: u16,
     reserved: u16,
     data: [u8; 1024],
-    blocks: [BlockId; 687],
-    crc: Crc,
+    blocks: [BlockId; 686],
+}
+
+impl FileBlock {
+    fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
+        let block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(bytes);
+        if let Some(block) = block {
+            return Ok((*block).clone());
+        }
+
+        return Err(ErrorKind::InconsistentState);
+    }
 }
 
 #[derive(AsBytes, FromBytes)]
 #[repr(packed)]
 struct ExtFileBlock {
     magic: BlockMagic,
+    crc: Crc,
     next_inode: BlockId,
     blocks: [BlockId; 1021],
-    crc: Crc,
 }
 
 #[derive(AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct FreeBlock {
     magic: BlockMagic,
+    crc: Crc,
     next_free_id: BlockId,
     prev_free_id: BlockId,
-    crc: Crc,
 }
 
 pub struct Geometry {
@@ -162,7 +207,7 @@ pub enum ErrorKind {
 }
 
 /// Attributes associated with a file.
-pub struct FileAttrs {
+pub struct Attrs {
     pub atime: Timestamp,
     pub mtime: Timestamp,
     pub ctime: Timestamp,
@@ -233,12 +278,16 @@ impl<T: Storage> IronFs<T> {
         let mut dir_block = DirBlock {
             magic: DIR_BLOCK_MAGIC,
             next_dir_block: BLOCK_ID_NULL,
+            name_len: 0,
             name: [0u8; NAME_NLEN],
+            atime: Timestamp { secs: 0, nsecs: 0 },
+            mtime: Timestamp { secs: 0, nsecs: 0 },
+            ctime: Timestamp { secs: 0, nsecs: 0 },
             owner: 0,
             group: 0,
             perms: 0,
             reserved: 0,
-            content_blocks: [BLOCK_ID_NULL; 955],
+            content_blocks: [BLOCK_ID_NULL; 948],
             crc: CRC_INIT,
         };
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
@@ -266,7 +315,51 @@ impl<T: Storage> IronFs<T> {
     }
     */
 
-    pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<FileId, ErrorKind> {
+    pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<BlockId, ErrorKind> {
+        let dir = self.read_dir_block(dir_id)?;
+        // TODO handle extended directory.
+        for block_id in dir.content_blocks.iter() {
+            if *block_id != BLOCK_ID_NULL {
+                // Read out existing block. Check filename.
+                let mut block = [0u8; BLOCK_SIZE];
+                self.read_block(block_id, &mut block[..])
+                    .expect("failure to read block");
+
+                match block_magic_type(&block) {
+                    Some(BlockMagicType::FileBlock) => {
+                        let file_block = FileBlock::try_from_bytes(&block[..])
+                            .expect("failure to convert bytes to file block");
+                        let file_name =
+                            core::str::from_utf8(&file_block.name[..file_block.name_len as usize]);
+                        if let Ok(file_name) = file_name {
+                            if name == file_name {
+                                return Ok(*block_id);
+                            }
+                        } else {
+                            error!("file name could not be converted to utf8");
+                        }
+                    }
+                    Some(BlockMagicType::DirBlock) => {
+                        let dir_block = DirBlock::try_from_bytes(&block[..])
+                            .expect("failure to convert bytes to dir block");
+                        let dir_name =
+                            core::str::from_utf8(&dir_block.name[..dir_block.name_len as usize]);
+                        if let Ok(dir_name) = dir_name {
+                            if name == dir_name {
+                                return Ok(*block_id);
+                            }
+                        } else {
+                            error!("directory name could not be converted to utf8");
+                        }
+                    }
+                    _ => {
+                        // This is a major error.
+                        unreachable!();
+                    }
+                }
+            }
+        }
+
         Err(ErrorKind::NoEntry)
     }
 
@@ -282,12 +375,16 @@ impl<T: Storage> IronFs<T> {
             let mut new_directory_block = DirBlock {
                 magic: DIR_BLOCK_MAGIC,
                 next_dir_block: BLOCK_ID_NULL,
+                name_len: 0,
                 name: [0u8; NAME_NLEN],
+                atime: Timestamp { secs: 0, nsecs: 0 },
+                mtime: Timestamp { secs: 0, nsecs: 0 },
+                ctime: Timestamp { secs: 0, nsecs: 0 },
                 owner: 0,
                 group: 0,
                 perms: 0,
                 reserved: 0,
-                content_blocks: [BLOCK_ID_NULL; 955],
+                content_blocks: [BLOCK_ID_NULL; 948],
                 crc: CRC_INIT,
             };
             let new_directory_block_id = DirectoryId(id.0);
@@ -305,17 +402,36 @@ impl<T: Storage> IronFs<T> {
         Err(ErrorKind::NoEntry)
     }
 
-    pub fn attrs(&self, entry: &FileId) -> Result<FileAttrs, ErrorKind> {
-        match self.read_file_block(entry) {
-            Ok(file) => Ok(FileAttrs {
-                atime: file.atime,
-                mtime: file.mtime,
-                ctime: file.ctime,
-                owner: file.owner,
-                group: file.group,
-                perms: file.perms,
-            }),
-            Err(e) => Err(e),
+    pub fn attrs(&self, entry: &BlockId) -> Result<Attrs, ErrorKind> {
+        let mut bytes = [0u8; BLOCK_SIZE];
+        self.read_block(entry, &mut bytes[..])
+            .expect("failure to read block");
+        match block_magic_type(&bytes) {
+            Some(BlockMagicType::FileBlock) => {
+                let file = FileBlock::try_from_bytes(&bytes[..])
+                    .expect("failure to convert bytes to file block");
+                Ok(Attrs {
+                    atime: file.atime,
+                    mtime: file.mtime,
+                    ctime: file.ctime,
+                    owner: file.owner,
+                    group: file.group,
+                    perms: file.perms,
+                })
+            }
+            Some(BlockMagicType::DirBlock) => {
+                let dir = DirBlock::try_from_bytes(&bytes[..])
+                    .expect("failure to convert bytes to dir block");
+                Ok(Attrs {
+                    atime: dir.atime,
+                    mtime: dir.mtime,
+                    ctime: dir.ctime,
+                    owner: dir.owner,
+                    group: dir.group,
+                    perms: dir.perms,
+                })
+            }
+            _ => Err(ErrorKind::InconsistentState),
         }
     }
 
@@ -325,6 +441,11 @@ impl<T: Storage> IronFs<T> {
 
     fn id_to_lba(&self, id: u32) -> usize {
         (id as usize * self.block_size()) / LBA_SIZE
+    }
+
+    fn read_block(&self, entry: &BlockId, bytes: &mut [u8]) -> Result<(), ErrorKind> {
+        self.storage.read(entry.0, bytes);
+        Ok(())
     }
 
     fn read_dir_block(&self, entry: &DirectoryId) -> Result<DirBlock, ErrorKind> {
@@ -484,6 +605,21 @@ impl<T: Storage> IronFs<T> {
         self.write_free_block(&next_free_block_id, &next_free_block)?;
 
         Ok(())
+    }
+}
+
+fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
+    let mut magic = [0u8; 4];
+    magic.clone_from_slice(&bytes[0..4]);
+    match BlockMagic(magic) {
+        DATA_BLOCK_MAGIC => Some(BlockMagicType::DataBlock),
+        FILE_BLOCK_MAGIC => Some(BlockMagicType::FileBlock),
+        EXT_FILE_BLOCK_MAGIC => Some(BlockMagicType::ExtFileBlock),
+        SUPER_BLOCK_MAGIC => Some(BlockMagicType::SuperBlock),
+        DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlock),
+        EXT_DIR_BLOCK_MAGIC => Some(BlockMagicType::ExtDirBlock),
+        FREE_BLOCK_MAGIC => Some(BlockMagicType::FreeBlock),
+        _ => None,
     }
 }
 
