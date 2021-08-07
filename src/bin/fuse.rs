@@ -5,7 +5,7 @@ use fuser::{
 };
 use ironfs::IronFs;
 use log::LevelFilter;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use std::ffi::OsStr;
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
@@ -13,36 +13,30 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 type Inode = u32;
 
-struct FileAttr {
-    inode: Inode,
-    open_file_handles: u32,
-    size: u32,
-    atime: (i64, u32),
-    mtime: (i64, u32),
-    ctime: (i64, u32),
-    perm: u16,
-    nlink: u32,
-    uid: u32,
-    gid: u32,
-}
+struct FileAttr(ironfs::Attrs);
 
 const BLOCK_SIZE: u64 = 4096;
 
 impl From<FileAttr> for fuser::FileAttr {
     fn from(attr: FileAttr) -> Self {
+        let attr = attr.0;
+        let kind = match attr.kind {
+            ironfs::AttrKind::File => fuser::FileType::RegularFile,
+            ironfs::AttrKind::Directory => fuser::FileType::Directory,
+        };
         fuser::FileAttr {
-            ino: attr.inode as u64,
+            ino: attr.block_id.0 as u64,
             size: attr.size as u64,
             blocks: (attr.size as u64 + BLOCK_SIZE - 1) / BLOCK_SIZE,
-            atime: UNIX_EPOCH + Duration::new(attr.atime.0 as u64, attr.atime.1),
-            mtime: UNIX_EPOCH + Duration::new(attr.mtime.0 as u64, attr.mtime.1),
-            ctime: UNIX_EPOCH + Duration::new(attr.ctime.0 as u64, attr.ctime.1),
+            atime: UNIX_EPOCH + Duration::new(attr.atime.secs as u64, attr.atime.nsecs as u32),
+            mtime: UNIX_EPOCH + Duration::new(attr.mtime.secs as u64, attr.mtime.nsecs as u32),
+            ctime: UNIX_EPOCH + Duration::new(attr.ctime.secs as u64, attr.ctime.nsecs as u32),
             crtime: SystemTime::UNIX_EPOCH,
-            kind: fuser::FileType::RegularFile,
-            perm: attr.perm,
-            nlink: attr.nlink,
-            uid: attr.uid,
-            gid: attr.gid,
+            kind: kind,
+            perm: attr.perms,
+            nlink: 2,
+            uid: attr.owner as u32,
+            gid: attr.group as u32,
             rdev: 0,
             blksize: BLOCK_SIZE as u32,
             flags: 0,
@@ -75,19 +69,7 @@ impl Filesystem for FuseIronFs {
             info!("found entry {:?} for parent {:?}", name.to_str(), parent);
             match self.0.attrs(&entry) {
                 Ok(attr) => {
-                    let file_attr = FileAttr {
-                        inode: entry.0,
-                        open_file_handles: 0,
-                        size: 0,
-                        atime: (attr.atime.secs, attr.atime.nsecs as u32),
-                        mtime: (attr.mtime.secs, attr.mtime.nsecs as u32),
-                        ctime: (attr.ctime.secs, attr.ctime.nsecs as u32),
-                        perm: attr.perms,
-                        nlink: 0,
-                        uid: attr.owner as u32,
-                        gid: attr.group as u32,
-                    };
-                    reply.entry(&Duration::new(0, 0), &file_attr.into(), 0);
+                    reply.entry(&Duration::new(0, 0), &FileAttr(attr).into(), 0);
                 }
                 Err(e) => {
                     unreachable!();
@@ -103,7 +85,14 @@ impl Filesystem for FuseIronFs {
 
     fn getattr(&mut self, _req: &Request, inode: u64, reply: ReplyAttr) {
         debug!("getattr");
-        reply.error(libc::ENOSYS);
+        match self.0.attrs(&ironfs::BlockId(inode as u32)) {
+            Ok(attr) => {
+                reply.attr(&Duration::new(0, 0), &FileAttr(attr).into());
+            }
+            Err(_) => {
+                reply.error(libc::EIO);
+            }
+        }
     }
 
     fn setattr(

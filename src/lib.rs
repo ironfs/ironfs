@@ -233,8 +233,17 @@ pub enum ErrorKind {
     NotFormatted,
 }
 
+#[derive(Debug)]
+pub enum AttrKind {
+    File,
+    Directory,
+}
+
 /// Attributes associated with a file.
 pub struct Attrs {
+    pub block_id: BlockId,
+    pub kind: AttrKind,
+    pub size: u32,
     pub atime: Timestamp,
     pub mtime: Timestamp,
     pub ctime: Timestamp,
@@ -394,6 +403,8 @@ impl<T: Storage> IronFs<T> {
     }
 
     pub fn mkdir(&mut self, dir_id: &DirectoryId, name: &str) -> Result<DirectoryId, ErrorKind> {
+        // TODO handle directory already exists.
+        // TODO handle permissions.
         let mut existing_directory = self.read_dir_block(dir_id)?;
         trace!("mkdir: read existing directory");
         // Find existing slot for new directory to be added.
@@ -433,6 +444,9 @@ impl<T: Storage> IronFs<T> {
                 let file = FileBlock::try_from_bytes(&bytes[..])
                     .expect("failure to convert bytes to file block");
                 Ok(Attrs {
+                    block_id: *entry,
+                    kind: AttrKind::File,
+                    size: 1,
                     atime: file.atime,
                     mtime: file.mtime,
                     ctime: file.ctime,
@@ -445,6 +459,9 @@ impl<T: Storage> IronFs<T> {
                 let dir = DirBlock::try_from_bytes(&bytes[..])
                     .expect("failure to convert bytes to dir block");
                 Ok(Attrs {
+                    block_id: *entry,
+                    kind: AttrKind::Directory,
+                    size: 1,
                     atime: dir.atime,
                     mtime: dir.mtime,
                     ctime: dir.ctime,
