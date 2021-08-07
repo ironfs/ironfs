@@ -1,6 +1,6 @@
 #![no_std]
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
@@ -31,30 +31,30 @@ enum BlockMagicType {
     FreeBlock,
 }
 
-#[derive(AsBytes, FromBytes, PartialEq, Eq, Clone)]
+#[derive(Debug, AsBytes, FromBytes, PartialEq, Eq, Clone)]
 #[repr(C)]
 struct BlockMagic([u8; 4]);
 
-#[derive(AsBytes, FromBytes, Clone, Copy, PartialEq)]
+#[derive(Debug, AsBytes, FromBytes, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct BlockId(pub u32);
 
 const BLOCK_ID_NULL: BlockId = BlockId(0xFFFFFFFF);
 
-#[derive(AsBytes, FromBytes, Clone)]
+#[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(C)]
 struct Crc(u32);
 
 const CRC_INIT: Crc = Crc(0x00000000);
 
-#[derive(AsBytes, FromBytes, Clone)]
+#[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct GenericBlock {
     magic: BlockMagic,
     crc: Crc,
 }
 
-#[derive(AsBytes, FromBytes, Clone)]
+#[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct SuperBlock {
     magic: BlockMagic,
@@ -67,7 +67,9 @@ struct SuperBlock {
     created_on: Timestamp,
 }
 
-#[derive(AsBytes, FromBytes, Clone)]
+const DIR_BLOCK_NUM_ENTRIES: usize = 942;
+
+#[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct DirBlock {
     magic: BlockMagic,
@@ -81,8 +83,8 @@ struct DirBlock {
     owner: u16,
     group: u16,
     perms: u16,
-    reserved: u16,
-    content_blocks: [BlockId; 948],
+    reserved1: u16,
+    entries: [BlockId; DIR_BLOCK_NUM_ENTRIES],
 }
 
 impl DirBlock {
@@ -93,6 +95,27 @@ impl DirBlock {
         }
 
         return Err(ErrorKind::InconsistentState);
+    }
+}
+
+impl Default for DirBlock {
+    fn default() -> Self {
+        // Todo record current time.
+        DirBlock {
+            magic: DIR_BLOCK_MAGIC,
+            crc: CRC_INIT,
+            next_dir_block: BLOCK_ID_NULL,
+            name_len: 0,
+            name: [0u8; NAME_NLEN],
+            atime: Timestamp { secs: 0, nsecs: 0 },
+            mtime: Timestamp { secs: 0, nsecs: 0 },
+            ctime: Timestamp { secs: 0, nsecs: 0 },
+            owner: 0,
+            group: 0,
+            perms: 0,
+            reserved1: 0,
+            entries: [BLOCK_ID_NULL; DIR_BLOCK_NUM_ENTRIES],
+        }
     }
 }
 
@@ -113,7 +136,7 @@ struct DataBlock {
     data: [u8; 4088],
 }
 
-#[derive(AsBytes, FromBytes, Clone)]
+#[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 pub struct Timestamp {
     pub secs: i64,
@@ -159,7 +182,7 @@ struct ExtFileBlock {
     blocks: [BlockId; 1021],
 }
 
-#[derive(AsBytes, FromBytes, Clone)]
+#[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct FreeBlock {
     magic: BlockMagic,
@@ -173,10 +196,12 @@ pub struct Geometry {
     pub num_blocks: usize,
 }
 
+pub struct LbaId(pub usize);
+
 pub trait Storage {
-    fn read(&self, lba: u32, data: &mut [u8]);
-    fn write(&mut self, lba: u32, data: &[u8]);
-    fn erase(&mut self, lba: u32, num_lba: u32);
+    fn read(&self, lba: LbaId, data: &mut [u8]);
+    fn write(&mut self, lba: LbaId, data: &[u8]);
+    fn erase(&mut self, lba: LbaId, num_lba: usize);
     fn geometry(&self) -> Geometry;
 }
 
@@ -186,7 +211,9 @@ pub struct IronFs<T: Storage> {
     is_formatted: bool,
 }
 
+#[derive(Debug)]
 pub struct DirectoryId(pub u32);
+#[derive(Debug)]
 pub struct FileId(pub u32);
 
 pub struct DirectoryListing;
@@ -228,18 +255,22 @@ impl<T: Storage> IronFs<T> {
     }
 
     pub fn bind(&mut self) -> Result<(), ErrorKind> {
+        debug!("entered bind.");
         if let Some(super_block) = self.read_super_block().ok() {
             if super_block.magic != SUPER_BLOCK_MAGIC {
                 debug!("super block had wrong magic.");
                 return Err(ErrorKind::NotFormatted);
             }
             self.is_formatted = true;
+            debug!("filesystem is formatted");
 
             // Hunt for the first free_block.
             for i in 1..super_block.num_blocks {
+                trace!("looking for free block at: {}", i);
                 let block_id = BlockId(i);
                 match self.read_free_block(&block_id) {
                     Ok(_) => {
+                        debug!("found first free block at: {:?}", block_id);
                         self.next_free_block_id = block_id;
                         break;
                     }
@@ -275,35 +306,33 @@ impl<T: Storage> IronFs<T> {
         self.write_super_block(&super_block)?;
 
         // Write the initial settings for the directory block.
-        let mut dir_block = DirBlock {
-            magic: DIR_BLOCK_MAGIC,
-            next_dir_block: BLOCK_ID_NULL,
-            name_len: 0,
-            name: [0u8; NAME_NLEN],
-            atime: Timestamp { secs: 0, nsecs: 0 },
-            mtime: Timestamp { secs: 0, nsecs: 0 },
-            ctime: Timestamp { secs: 0, nsecs: 0 },
-            owner: 0,
-            group: 0,
-            perms: 0,
-            reserved: 0,
-            content_blocks: [BLOCK_ID_NULL; 948],
-            crc: CRC_INIT,
-        };
+        let mut dir_block = DirBlock::default();
+        dir_block.name_len = 1;
+        dir_block.name[0] = '/' as u8;
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
+        trace!("writing root dir block.");
         self.write_dir_block(&DirectoryId(1), &dir_block);
 
         for i in 2..num_blocks {
-            let prev_block_id = if i == 2 {
+            let prev_free_id = if i == 2 {
                 BlockId(num_blocks - 1)
             } else {
                 BlockId(i - 1)
             };
-            let next_block_id = if i == (num_blocks - 1) {
+            let next_free_id = if i == (num_blocks - 1) {
                 BlockId(2)
             } else {
                 BlockId(i + 1)
             };
+            let mut free_block = FreeBlock {
+                magic: FREE_BLOCK_MAGIC,
+                crc: CRC_INIT,
+                next_free_id,
+                prev_free_id,
+            };
+            Self::fix_free_block_crc(&mut free_block);
+
+            self.write_free_block(&BlockId(i), &free_block)?;
         }
         self.next_free_block_id = BlockId(2);
 
@@ -317,8 +346,9 @@ impl<T: Storage> IronFs<T> {
 
     pub fn lookup(&self, dir_id: &DirectoryId, name: &str) -> Result<BlockId, ErrorKind> {
         let dir = self.read_dir_block(dir_id)?;
+        //trace!("read existing directory {:?} from dir_id: {:?}", dir, dir_id);
         // TODO handle extended directory.
-        for block_id in dir.content_blocks.iter() {
+        for block_id in dir.entries.iter() {
             if *block_id != BLOCK_ID_NULL {
                 // Read out existing block. Check filename.
                 let mut block = [0u8; BLOCK_SIZE];
@@ -365,39 +395,31 @@ impl<T: Storage> IronFs<T> {
 
     pub fn mkdir(&mut self, dir_id: &DirectoryId, name: &str) -> Result<DirectoryId, ErrorKind> {
         let mut existing_directory = self.read_dir_block(dir_id)?;
+        trace!("mkdir: read existing directory");
         // Find existing slot for new directory to be added.
         if let Some(v) = existing_directory
-            .content_blocks
+            .entries
             .iter_mut()
             .find(|v| **v == BLOCK_ID_NULL)
         {
             let id = self.acquire_free_block()?;
-            let mut new_directory_block = DirBlock {
-                magic: DIR_BLOCK_MAGIC,
-                next_dir_block: BLOCK_ID_NULL,
-                name_len: 0,
-                name: [0u8; NAME_NLEN],
-                atime: Timestamp { secs: 0, nsecs: 0 },
-                mtime: Timestamp { secs: 0, nsecs: 0 },
-                ctime: Timestamp { secs: 0, nsecs: 0 },
-                owner: 0,
-                group: 0,
-                perms: 0,
-                reserved: 0,
-                content_blocks: [BLOCK_ID_NULL; 948],
-                crc: CRC_INIT,
-            };
+            trace!("mkdir: using free block: {:?}", id);
+            let mut new_directory_block = DirBlock::default();
+            new_directory_block.name_len = name.len() as u32;
+            new_directory_block.name[..name.len()].copy_from_slice(name.as_bytes());
             let new_directory_block_id = DirectoryId(id.0);
             Self::fix_dir_block_crc(&mut new_directory_block);
             self.write_dir_block(&new_directory_block_id, &new_directory_block)?;
+            trace!("mkdir: wrote new directory");
             *v = BlockId(id.0);
             Self::fix_dir_block_crc(&mut existing_directory);
             self.write_dir_block(&dir_id, &existing_directory)?;
+            trace!("mkdir: wrote existing directory");
+            return Ok(new_directory_block_id);
         } else {
             // TODO handle creating a new ext directory.
             unreachable!();
         }
-        //if let Some(i, _) = existing_directory.content_blocks.iter().enumerate().any(|(i, v)| v == BLOCK_ID_NULL) { }
 
         Err(ErrorKind::NoEntry)
     }
@@ -439,33 +461,25 @@ impl<T: Storage> IronFs<T> {
         BLOCK_SIZE
     }
 
-    fn id_to_lba(&self, id: u32) -> usize {
-        (id as usize * self.block_size()) / LBA_SIZE
+    fn id_to_lba(&self, id: u32) -> LbaId {
+        LbaId((id as usize * self.block_size()) / LBA_SIZE)
     }
 
     fn read_block(&self, entry: &BlockId, bytes: &mut [u8]) -> Result<(), ErrorKind> {
-        self.storage.read(entry.0, bytes);
+        let lba_id = self.id_to_lba(entry.0);
+        self.storage.read(lba_id, bytes);
         Ok(())
     }
 
     fn read_dir_block(&self, entry: &DirectoryId) -> Result<DirBlock, ErrorKind> {
-        let lba_id = self.id_to_lba(entry.0) as u32;
+        let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(lba_id, &mut bytes);
-        let block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(&bytes[..]);
-        if let Some(block) = block {
-            if block.magic != DIR_BLOCK_MAGIC {
-                return Err(ErrorKind::InconsistentState);
-            }
-
-            return Ok((*block).clone());
-        } else {
-            return Err(ErrorKind::InconsistentState);
-        }
+        DirBlock::try_from_bytes(&bytes[..])
     }
 
     fn read_file_block(&self, entry: &FileId) -> Result<FileBlock, ErrorKind> {
-        let lba_id = self.id_to_lba(entry.0) as u32;
+        let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(lba_id, &mut bytes);
         let file_block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(&bytes[..]);
@@ -482,7 +496,7 @@ impl<T: Storage> IronFs<T> {
 
     fn read_super_block(&mut self) -> Result<SuperBlock, ErrorKind> {
         let mut bytes = [0u8; BLOCK_SIZE];
-        self.storage.read(0, &mut bytes);
+        self.storage.read(LbaId(0), &mut bytes);
         let block: Option<(LayoutVerified<_, SuperBlock>, &[u8])> =
             LayoutVerified::new_from_prefix(&bytes[..]);
         if let Some((block, _)) = block {
@@ -500,7 +514,7 @@ impl<T: Storage> IronFs<T> {
 
     fn write_super_block(&mut self, super_block: &SuperBlock) -> Result<(), ErrorKind> {
         let bytes = super_block.as_bytes();
-        self.storage.write(0, &bytes);
+        self.storage.write(LbaId(0), &bytes);
         Ok(())
     }
 
@@ -524,18 +538,19 @@ impl<T: Storage> IronFs<T> {
         entry: &DirectoryId,
         directory: &DirBlock,
     ) -> Result<(), ErrorKind> {
-        let lba_id = self.id_to_lba(entry.0) as u32;
+        let lba_id = self.id_to_lba(entry.0);
         let bytes = directory.as_bytes();
         self.storage.write(lba_id, &bytes);
         Ok(())
     }
 
     fn read_free_block(&self, free_block_id: &BlockId) -> Result<FreeBlock, ErrorKind> {
-        let lba_id = self.id_to_lba(free_block_id.0) as u32;
+        let lba_id = self.id_to_lba(free_block_id.0);
         let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(lba_id, &mut bytes);
-        let block: Option<LayoutVerified<_, FreeBlock>> = LayoutVerified::new(&bytes[..]);
-        if let Some(block) = block {
+        let block: Option<(LayoutVerified<_, FreeBlock>, _)> =
+            LayoutVerified::new_from_prefix(&bytes[..]);
+        if let Some((block, _)) = block {
             if block.magic != FREE_BLOCK_MAGIC {
                 return Err(ErrorKind::InconsistentState);
             }
@@ -551,7 +566,7 @@ impl<T: Storage> IronFs<T> {
         free_block_id: &BlockId,
         free_block: &FreeBlock,
     ) -> Result<(), ErrorKind> {
-        let lba_id = self.id_to_lba(free_block_id.0) as u32;
+        let lba_id = self.id_to_lba(free_block_id.0);
         let bytes = free_block.as_bytes();
         self.storage.write(lba_id, &bytes);
         Ok(())

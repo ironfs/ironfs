@@ -72,6 +72,7 @@ impl Filesystem for FuseIronFs {
         debug!("lookup parent: {}", parent);
         let dir_id = ironfs::DirectoryId(parent as u32);
         if let Ok(entry) = self.0.lookup(&dir_id, name.to_str().unwrap()) {
+            info!("found entry {:?} for parent {:?}", name.to_str(), parent);
             match self.0.attrs(&entry) {
                 Ok(attr) => {
                     let file_attr = FileAttr {
@@ -159,7 +160,7 @@ impl Filesystem for FuseIronFs {
 
         let dir_id = ironfs::DirectoryId(parent as u32);
         // TODO
-        self.0.mkdir(&dir_id, name.to_str().unwrap());
+        self.0.mkdir(&dir_id, name.to_str().unwrap()).unwrap();
 
         let attr = fuser::FileAttr {
             ino: dir_id.0 as u64,
@@ -457,17 +458,17 @@ impl RamStorage {
 const LBA_SIZE: usize = 512;
 
 impl ironfs::Storage for RamStorage {
-    fn read(&self, lba: u32, data: &mut [u8]) {
-        let start_addr = lba as usize * LBA_SIZE;
+    fn read(&self, lba: ironfs::LbaId, data: &mut [u8]) {
+        let start_addr = lba.0 * LBA_SIZE;
         data.clone_from_slice(&self.0[start_addr..start_addr + data.len()]);
     }
-    fn write(&mut self, lba: u32, data: &[u8]) {
-        let start_addr = lba as usize * LBA_SIZE;
+    fn write(&mut self, lba: ironfs::LbaId, data: &[u8]) {
+        let start_addr = lba.0 * LBA_SIZE;
         self.0[start_addr..start_addr + data.len()].copy_from_slice(data);
     }
-    fn erase(&mut self, lba: u32, num_lba: u32) {
-        let start_addr = lba as usize * LBA_SIZE;
-        let end_addr = (lba + num_lba) as usize * LBA_SIZE;
+    fn erase(&mut self, lba: ironfs::LbaId, num_lba: usize) {
+        let start_addr = lba.0 * LBA_SIZE;
+        let end_addr = (lba.0 + num_lba) * LBA_SIZE;
         for i in &mut self.0[start_addr..end_addr] {
             *i = 0xFF;
         }
