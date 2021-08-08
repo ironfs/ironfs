@@ -8,6 +8,7 @@ use log::LevelFilter;
 use log::{debug, info, trace, warn};
 use std::ffi::OsStr;
 use std::os::raw::c_int;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -284,7 +285,27 @@ impl Filesystem for FuseIronFs {
         mut reply: ReplyDirectory,
     ) {
         debug!("readdir");
-        reply.error(libc::ENOSYS);
+        let directory_listing = self.0.readdir(ironfs::DirectoryId(inode as u32)).unwrap();
+        for (block_id, index) in directory_listing {
+            let mut name = [0u8; ironfs::NAME_NLEN];
+            // TODO fix unwrap() usage.
+            self.0.block_name(&block_id, &mut name[..]).unwrap();
+            let inode_type = match self.0.block_file_type(&block_id).unwrap() {
+                ironfs::AttrKind::File => fuser::FileType::RegularFile,
+                ironfs::AttrKind::Directory => fuser::FileType::Directory,
+            };
+
+            let buffer_full: bool = reply.add(
+                block_id.0 as u64,
+                offset + index as i64,
+                inode_type,
+                OsStr::from_bytes(&name[..]),
+            );
+            if buffer_full {
+                break;
+            }
+        }
+        reply.ok();
     }
 
     fn releasedir(

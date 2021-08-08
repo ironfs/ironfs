@@ -18,7 +18,7 @@ const BLOCK_SIZE: usize = 4096;
 
 const LBA_SIZE: usize = 512;
 
-const NAME_NLEN: usize = 256;
+pub const NAME_NLEN: usize = 256;
 
 /// Representation of the different types of blocks in the filesystem.
 enum BlockMagicType {
@@ -216,7 +216,40 @@ pub struct DirectoryId(pub u32);
 #[derive(Debug)]
 pub struct FileId(pub u32);
 
-pub struct DirectoryListing;
+pub struct DirectoryListing {
+    block_id: DirectoryId,
+    index: usize,
+    cache: [u8; BLOCK_SIZE],
+}
+
+impl Iterator for DirectoryListing {
+    type Item = (BlockId, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // TODO handle moving to next
+        loop {
+            if self.index < DIR_BLOCK_NUM_ENTRIES {
+                self.index += 1;
+
+                let block: Option<LayoutVerified<_, DirBlock>> =
+                    LayoutVerified::new(&self.cache[..]);
+                if let Some(block) = block {
+                    let id = block.entries[self.index];
+                    if id != BLOCK_ID_NULL {
+                        return Some((id, self.index));
+                    }
+                } else {
+                    #[cfg(debug_assertions)]
+                    panic!("Filesystem is in inconsistent state.");
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        None
+    }
+}
 
 impl DirectoryListing {
     pub fn get(&self, name: &str) -> Option<u32> {
@@ -429,10 +462,8 @@ impl<T: Storage> IronFs<T> {
             return Ok(new_directory_block_id);
         } else {
             // TODO handle creating a new ext directory.
-            unreachable!();
+            Err(ErrorKind::NoEntry)
         }
-
-        Err(ErrorKind::NoEntry)
     }
 
     pub fn attrs(&self, entry: &BlockId) -> Result<Attrs, ErrorKind> {
@@ -474,8 +505,55 @@ impl<T: Storage> IronFs<T> {
         }
     }
 
+    pub fn readdir(&self, directory_id: DirectoryId) -> Result<DirectoryListing, ErrorKind> {
+        // TODO handle directory_id being invalid directory.
+        Ok(DirectoryListing {
+            block_id: directory_id,
+            index: 0,
+            cache: [0u8; BLOCK_SIZE],
+        })
+    }
+
     pub fn block_size(&self) -> usize {
         BLOCK_SIZE
+    }
+
+    pub fn block_name<'a>(&'a self, block_id: &BlockId, name: &mut [u8]) -> Result<(), ErrorKind> {
+        let mut bytes = [0u8; BLOCK_SIZE];
+        self.read_block(block_id, &mut bytes[..])?;
+
+        match block_magic_type(&bytes) {
+            Some(BlockMagicType::FileBlock) => {
+                let file_block: Option<LayoutVerified<_, FileBlock>> =
+                    LayoutVerified::new(&bytes[..]);
+                if let Some(file_block) = file_block {
+                    name.copy_from_slice(&file_block.name[..file_block.name_len as usize]);
+                    return Ok(());
+                }
+            }
+            Some(BlockMagicType::DirBlock) => {
+                let dir_block: Option<LayoutVerified<_, DirBlock>> =
+                    LayoutVerified::new(&bytes[..]);
+                if let Some(dir_block) = dir_block {
+                    name.copy_from_slice(&dir_block.name[..dir_block.name_len as usize]);
+                    return Ok(());
+                }
+            }
+            _ => return Err(ErrorKind::InconsistentState),
+        }
+
+        unreachable!();
+    }
+
+    pub fn block_file_type(&self, block_id: &BlockId) -> Result<AttrKind, ErrorKind> {
+        let mut block = [0u8; BLOCK_SIZE];
+        self.read_block(block_id, &mut block[..])?;
+
+        match block_magic_type(&block) {
+            Some(BlockMagicType::FileBlock) => Ok(AttrKind::File),
+            Some(BlockMagicType::DirBlock) => Ok(AttrKind::Directory),
+            _ => Err(ErrorKind::InconsistentState),
+        }
     }
 
     fn id_to_lba(&self, id: u32) -> LbaId {
