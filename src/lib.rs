@@ -223,20 +223,23 @@ pub struct DirectoryListing {
 }
 
 impl Iterator for DirectoryListing {
-    type Item = (BlockId, usize);
+    type Item = BlockId;
 
     fn next(&mut self) -> Option<Self::Item> {
         // TODO handle moving to next
         loop {
             if self.index < DIR_BLOCK_NUM_ENTRIES {
+                let index = self.index;
                 self.index += 1;
 
                 let block: Option<LayoutVerified<_, DirBlock>> =
                     LayoutVerified::new(&self.cache[..]);
                 if let Some(block) = block {
-                    let id = block.entries[self.index];
+                    debug!("entries are: {:?}", &block.entries[..12]);
+                    let id = block.entries[index];
                     if id != BLOCK_ID_NULL {
-                        return Some((id, self.index));
+                        trace!("got entry for {} with id: {:?}", index, id);
+                        return Some(id);
                     }
                 } else {
                     #[cfg(debug_assertions)]
@@ -507,11 +510,14 @@ impl<T: Storage> IronFs<T> {
 
     pub fn readdir(&self, directory_id: DirectoryId) -> Result<DirectoryListing, ErrorKind> {
         // TODO handle directory_id being invalid directory.
-        Ok(DirectoryListing {
+        trace!("readdir called with id: {:?}", directory_id);
+        let mut listing = DirectoryListing {
             block_id: directory_id,
             index: 0,
             cache: [0u8; BLOCK_SIZE],
-        })
+        };
+        self.read_block(&BlockId(listing.block_id.0), &mut listing.cache[..])?;
+        Ok(listing)
     }
 
     pub fn block_size(&self) -> usize {
@@ -527,7 +533,8 @@ impl<T: Storage> IronFs<T> {
                 let file_block: Option<LayoutVerified<_, FileBlock>> =
                     LayoutVerified::new(&bytes[..]);
                 if let Some(file_block) = file_block {
-                    name.copy_from_slice(&file_block.name[..file_block.name_len as usize]);
+                    let name_len = file_block.name_len as usize;
+                    name[..name_len].copy_from_slice(&file_block.name[..name_len]);
                     return Ok(());
                 }
             }
@@ -535,7 +542,8 @@ impl<T: Storage> IronFs<T> {
                 let dir_block: Option<LayoutVerified<_, DirBlock>> =
                     LayoutVerified::new(&bytes[..]);
                 if let Some(dir_block) = dir_block {
-                    name.copy_from_slice(&dir_block.name[..dir_block.name_len as usize]);
+                    let name_len = dir_block.name_len as usize;
+                    name[..name_len].copy_from_slice(&dir_block.name[..name_len]);
                     return Ok(());
                 }
             }

@@ -85,7 +85,7 @@ impl Filesystem for FuseIronFs {
     fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {}
 
     fn getattr(&mut self, _req: &Request, inode: u64, reply: ReplyAttr) {
-        debug!("getattr");
+        debug!("getattr fir inode: {}", inode);
         match self.0.attrs(&ironfs::BlockId(inode as u32)) {
             Ok(attr) => {
                 reply.attr(&Duration::new(0, 0), &FileAttr(attr).into());
@@ -286,7 +286,7 @@ impl Filesystem for FuseIronFs {
     ) {
         debug!("readdir");
         let directory_listing = self.0.readdir(ironfs::DirectoryId(inode as u32)).unwrap();
-        for (block_id, index) in directory_listing {
+        for (index, block_id) in directory_listing.skip(offset as usize).enumerate() {
             let mut name = [0u8; ironfs::NAME_NLEN];
             // TODO fix unwrap() usage.
             self.0.block_name(&block_id, &mut name[..]).unwrap();
@@ -297,7 +297,7 @@ impl Filesystem for FuseIronFs {
 
             let buffer_full: bool = reply.add(
                 block_id.0 as u64,
-                offset + index as i64,
+                offset + index as i64 + 1,
                 inode_type,
                 OsStr::from_bytes(&name[..]),
             );
