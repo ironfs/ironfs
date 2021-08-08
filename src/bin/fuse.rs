@@ -85,7 +85,7 @@ impl Filesystem for FuseIronFs {
     fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {}
 
     fn getattr(&mut self, _req: &Request, inode: u64, reply: ReplyAttr) {
-        debug!("getattr fir inode: {}", inode);
+        debug!("getattr for inode: {}", inode);
         match self.0.attrs(&ironfs::BlockId(inode as u32)) {
             Ok(attr) => {
                 reply.attr(&Duration::new(0, 0), &FileAttr(attr).into());
@@ -507,7 +507,12 @@ fn main() {
 
     let opt = Opt::from_args();
 
-    let mut options = vec![MountOption::FSName("fuser".to_string())];
+    let fuse_options = vec![
+        MountOption::FSName("fuser".to_string()),
+        MountOption::AutoUnmount,
+        MountOption::NoDev,
+        MountOption::NoAtime,
+    ];
 
     //let storage = RamStorage::new(33554432);
     let mut ironfs = IronFs::from(RamStorage::new(33554432));
@@ -521,5 +526,5 @@ fn main() {
         }
         _ => {}
     };
-    fuser::mount2(FuseIronFs(ironfs), opt.mount_point, &options).unwrap();
+    fuser::mount2(FuseIronFs(ironfs), opt.mount_point, &fuse_options).unwrap();
 }
