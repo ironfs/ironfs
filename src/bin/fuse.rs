@@ -12,8 +12,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-type Inode = u32;
-
 struct FileAttr(ironfs::Attrs);
 
 const BLOCK_SIZE: u64 = 4096;
@@ -425,50 +423,6 @@ impl Filesystem for FuseIronFs {
         reply.error(libc::ENOSYS);
     }
 }
-
-/*
-#[derive(Serialize, Deserialize)]
-struct InodeAttributes {
-    pub inode: Inode,
-    pub open_file_handles: u64, // Ref count of open file handles to this inode
-    pub size: u64,
-    pub last_accessed: (i64, u32),
-    pub last_modified: (i64, u32),
-    pub last_metadata_changed: (i64, u32),
-    pub kind: FileKind,
-    // Permissions and special mode bits
-    pub mode: u16,
-    pub hardlinks: u32,
-    pub uid: u32,
-    pub gid: u32,
-    pub xattrs: BTreeMap<Vec<u8>, Vec<u8>>,
-}
-
-impl From<InodeAttributes> for fuser::FileAttr {
-    fn from(attrs: InodeAttributes) -> Self {
-        fuser::FileAttr {
-            ino: attrs.inode,
-            size: attrs.size,
-            blocks: (attrs.size + BLOCK_SIZE - 1) / BLOCK_SIZE,
-            atime: system_time_from_time(attrs.last_accessed.0, attrs.last_accessed.1),
-            mtime: system_time_from_time(attrs.last_modified.0, attrs.last_modified.1),
-            ctime: system_time_from_time(
-                attrs.last_metadata_changed.0,
-                attrs.last_metadata_changed.1,
-            ),
-            crtime: SystemTime::UNIX_EPOCH,
-            kind: attrs.kind.into(),
-            perm: attrs.mode,
-            nlink: attrs.hardlinks,
-            uid: attrs.uid,
-            gid: attrs.gid,
-            rdev: 0,
-            blksize: BLOCK_SIZE as u32,
-            flags: 0,
-        }
-    }
-}
-*/
 
 struct RamStorage(Vec<u8>);
 
