@@ -98,8 +98,8 @@ impl DirBlock {
     }
 }
 
-impl Default for DirBlock {
-    fn default() -> Self {
+impl DirBlock {
+    fn from_timestamp(now: Timestamp) -> Self {
         // Todo record current time.
         DirBlock {
             magic: DIR_BLOCK_MAGIC,
@@ -107,9 +107,9 @@ impl Default for DirBlock {
             next_dir_block: BLOCK_ID_NULL,
             name_len: 0,
             name: [0u8; NAME_NLEN],
-            atime: Timestamp { secs: 0, nsecs: 0 },
-            mtime: Timestamp { secs: 0, nsecs: 0 },
-            ctime: Timestamp { secs: 0, nsecs: 0 },
+            atime: now,
+            mtime: now,
+            ctime: now,
             owner: 0,
             group: 0,
             perms: 0,
@@ -136,7 +136,7 @@ struct DataBlock {
     data: [u8; 4088],
 }
 
-#[derive(Debug, AsBytes, FromBytes, Clone)]
+#[derive(Copy, Debug, AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 pub struct Timestamp {
     pub secs: i64,
@@ -330,7 +330,7 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
-    pub fn format(&mut self) -> Result<(), ErrorKind> {
+    pub fn format(&mut self, now: Timestamp) -> Result<(), ErrorKind> {
         let geometry = self.storage.geometry();
         let num_blocks = ((geometry.lba_size * geometry.num_blocks) / BLOCK_SIZE) as u32;
         debug!("num blocks is: {}", num_blocks);
@@ -351,7 +351,7 @@ impl<T: Storage> IronFs<T> {
         self.write_super_block(&super_block)?;
 
         // Write the initial settings for the directory block.
-        let mut dir_block = DirBlock::default();
+        let mut dir_block = DirBlock::from_timestamp(now);
         dir_block.name_len = 1;
         dir_block.name[0] = '/' as u8;
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
@@ -438,7 +438,12 @@ impl<T: Storage> IronFs<T> {
         Err(ErrorKind::NoEntry)
     }
 
-    pub fn mkdir(&mut self, dir_id: &DirectoryId, name: &str) -> Result<DirectoryId, ErrorKind> {
+    pub fn mkdir(
+        &mut self,
+        dir_id: &DirectoryId,
+        name: &str,
+        now: Timestamp,
+    ) -> Result<DirectoryId, ErrorKind> {
         // TODO handle directory already exists.
         // TODO handle permissions.
         let mut existing_directory = self.read_dir_block(dir_id)?;
@@ -451,7 +456,7 @@ impl<T: Storage> IronFs<T> {
         {
             let id = self.acquire_free_block()?;
             trace!("mkdir: using free block: {:?}", id);
-            let mut new_directory_block = DirBlock::default();
+            let mut new_directory_block = DirBlock::from_timestamp(now);
             new_directory_block.name_len = name.len() as u32;
             new_directory_block.name[..name.len()].copy_from_slice(name.as_bytes());
             let new_directory_block_id = DirectoryId(id.0);
@@ -459,6 +464,7 @@ impl<T: Storage> IronFs<T> {
             self.write_dir_block(&new_directory_block_id, &new_directory_block)?;
             trace!("mkdir: wrote new directory");
             *v = BlockId(id.0);
+            existing_directory.mtime = now;
             Self::fix_dir_block_crc(&mut existing_directory);
             self.write_dir_block(&dir_id, &existing_directory)?;
             trace!("mkdir: wrote existing directory");

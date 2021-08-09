@@ -18,6 +18,17 @@ struct FileAttr(ironfs::Attrs);
 
 const BLOCK_SIZE: u64 = 4096;
 
+fn current_timestamp() -> ironfs::Timestamp {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
+    ironfs::Timestamp {
+        secs: since_the_epoch.as_secs() as i64,
+        nsecs: since_the_epoch.subsec_nanos() as u64,
+    }
+}
+
 impl From<FileAttr> for fuser::FileAttr {
     fn from(attr: FileAttr) -> Self {
         let attr = attr.0;
@@ -150,7 +161,9 @@ impl Filesystem for FuseIronFs {
 
         let dir_id = ironfs::DirectoryId(parent as u32);
         // TODO
-        self.0.mkdir(&dir_id, name.to_str().unwrap()).unwrap();
+        self.0
+            .mkdir(&dir_id, name.to_str().unwrap(), current_timestamp())
+            .unwrap();
 
         let attr = fuser::FileAttr {
             ino: dir_id.0 as u64,
@@ -520,7 +533,9 @@ fn main() {
     match ironfs.bind() {
         Err(ironfs::ErrorKind::NotFormatted) => {
             debug!("Formatting.");
-            ironfs.format().expect("Failure to format ironfs.");
+            ironfs
+                .format(current_timestamp())
+                .expect("Failure to format ironfs.");
             debug!("Binding.");
             ironfs.bind().expect("Failure to bind after format.");
         }
