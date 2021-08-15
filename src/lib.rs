@@ -264,7 +264,6 @@ impl Iterator for DirectoryListing {
                 let block: Option<LayoutVerified<_, DirBlock>> =
                     LayoutVerified::new(&self.cache[..]);
                 if let Some(block) = block {
-                    debug!("entries are: {:?}", &block.entries[..12]);
                     let id = block.entries[index];
                     if id != BLOCK_ID_NULL {
                         trace!("got entry for {} with id: {:?}", index, id);
