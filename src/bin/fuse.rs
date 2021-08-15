@@ -155,33 +155,36 @@ impl Filesystem for FuseIronFs {
         _umask: u32,
         reply: ReplyEntry,
     ) {
+        // TODO prevent duplicate files.
         debug!("mkdir() called for {:?}", parent);
 
         let dir_id = ironfs::DirectoryId(parent as u32);
         // TODO
-        self.0
+        if let Ok(new_dir_id) = self
+            .0
             .mkdir(&dir_id, name.to_str().unwrap(), current_timestamp())
-            .unwrap();
-
-        let attr = fuser::FileAttr {
-            ino: dir_id.0 as u64,
-            size: BLOCK_SIZE,
-            blocks: 1,
-            atime: UNIX_EPOCH + Duration::new(0, 0),
-            mtime: UNIX_EPOCH + Duration::new(0, 0),
-            ctime: UNIX_EPOCH + Duration::new(0, 0),
-            crtime: SystemTime::UNIX_EPOCH,
-            kind: fuser::FileType::Directory,
-            perm: 0,
-            nlink: 2,
-            uid: 0,
-            gid: 0,
-            rdev: 0,
-            blksize: BLOCK_SIZE as u32,
-            flags: 0,
-        };
-        reply.entry(&Duration::new(0, 0), &attr, 0);
-        //reply.error(libc::ENOSYS);
+        {
+            let attr = fuser::FileAttr {
+                ino: new_dir_id.0 as u64,
+                size: BLOCK_SIZE,
+                blocks: 1,
+                atime: UNIX_EPOCH + Duration::new(0, 0),
+                mtime: UNIX_EPOCH + Duration::new(0, 0),
+                ctime: UNIX_EPOCH + Duration::new(0, 0),
+                crtime: SystemTime::UNIX_EPOCH,
+                kind: fuser::FileType::Directory,
+                perm: 0,
+                nlink: 2,
+                uid: 0,
+                gid: 0,
+                rdev: 0,
+                blksize: BLOCK_SIZE as u32,
+                flags: 0,
+            };
+            reply.entry(&Duration::new(0, 0), &attr, 0);
+        } else {
+            reply.error(libc::EIO);
+        }
     }
 
     fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
@@ -387,8 +390,37 @@ impl Filesystem for FuseIronFs {
         flags: i32,
         reply: ReplyCreate,
     ) {
+        // TODO prevent duplicate files.
         debug!("create");
-        reply.error(libc::ENOSYS);
+
+        let dir_id = ironfs::DirectoryId(parent as u32);
+        if let Ok(new_file_id) =
+            self.0
+                .create(&dir_id, name.to_str().unwrap(), mode, current_timestamp())
+        {
+            let attr = fuser::FileAttr {
+                ino: new_file_id.0 as u64,
+                size: BLOCK_SIZE,
+                blocks: 1,
+                atime: UNIX_EPOCH + Duration::new(0, 0),
+                mtime: UNIX_EPOCH + Duration::new(0, 0),
+                ctime: UNIX_EPOCH + Duration::new(0, 0),
+                crtime: SystemTime::UNIX_EPOCH,
+                kind: fuser::FileType::RegularFile,
+                perm: 0,
+                nlink: 2,
+                uid: 0,
+                gid: 0,
+                rdev: 0,
+                blksize: BLOCK_SIZE as u32,
+                flags: 0,
+            };
+
+            let file_handle_id = self.0.create_file_handle().unwrap();
+            reply.created(&Duration::new(0, 0), &attr, 0, file_handle_id.0 as u64, 0);
+        } else {
+            reply.error(libc::EIO);
+        }
     }
 
     #[cfg(target_os = "linux")]

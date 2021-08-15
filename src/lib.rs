@@ -173,6 +173,27 @@ impl FileBlock {
     }
 }
 
+impl FileBlock {
+    fn from_timestamp(now: Timestamp) -> Self {
+        FileBlock {
+            magic: FILE_BLOCK_MAGIC,
+            crc: CRC_INIT,
+            next_inode: BLOCK_ID_NULL,
+            name_len: 0,
+            name: [0u8; NAME_NLEN],
+            atime: now,
+            mtime: now,
+            ctime: now,
+            owner: 0,
+            group: 0,
+            perms: 0,
+            reserved: 0,
+            data: [0u8; 1024],
+            blocks: [BLOCK_ID_NULL; 686],
+        }
+    }
+}
+
 #[derive(AsBytes, FromBytes)]
 #[repr(packed)]
 struct ExtFileBlock {
@@ -205,10 +226,18 @@ pub trait Storage {
     fn geometry(&self) -> Geometry;
 }
 
+#[derive(Clone, Copy)]
+struct FileHandle;
+
+pub struct FileHandleId(pub usize);
+
+const MAX_NUM_FILE_HANDLES: usize = 16;
+
 pub struct IronFs<T: Storage> {
     storage: T,
     next_free_block_id: BlockId,
     is_formatted: bool,
+    file_handles: [Option<FileHandle>; MAX_NUM_FILE_HANDLES],
 }
 
 #[derive(Debug)]
@@ -296,6 +325,7 @@ impl<T: Storage> IronFs<T> {
             storage,
             next_free_block_id: BLOCK_ID_NULL,
             is_formatted: false,
+            file_handles: [None; MAX_NUM_FILE_HANDLES],
         }
     }
 
@@ -436,6 +466,42 @@ impl<T: Storage> IronFs<T> {
         }
 
         Err(ErrorKind::NoEntry)
+    }
+
+    pub fn create(
+        &mut self,
+        parent: &DirectoryId,
+        name: &str,
+        perms: u32,
+        now: Timestamp,
+    ) -> Result<FileId, ErrorKind> {
+        let mut existing_directory = self.read_dir_block(parent)?;
+        if let Some(v) = existing_directory
+            .entries
+            .iter_mut()
+            .find(|v| **v == BLOCK_ID_NULL)
+        {
+            let id = self.acquire_free_block()?;
+            trace!("create: using free block: {:?}", id);
+
+            let mut new_file_block = FileBlock::from_timestamp(now);
+            new_file_block.name_len = name.len() as u32;
+            new_file_block.name[..name.len()].copy_from_slice(name.as_bytes());
+            let new_file_block_id = FileId(id.0);
+            Self::fix_file_block_crc(&mut new_file_block);
+            self.write_file_block(&new_file_block_id, &new_file_block)?;
+            trace!("create: wrote new file");
+
+            *v = BlockId(id.0);
+            existing_directory.mtime = now;
+            Self::fix_dir_block_crc(&mut existing_directory);
+            self.write_dir_block(&parent, &existing_directory)?;
+            trace!("create: wrote existing directory");
+            return Ok(new_file_block_id);
+        } else {
+            // TODO handle creating a new ext directory.
+            Err(ErrorKind::NoEntry)
+        }
     }
 
     pub fn mkdir(
@@ -653,6 +719,13 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
+    fn write_file_block(&mut self, entry: &FileId, file: &FileBlock) -> Result<(), ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0);
+        let bytes = file.as_bytes();
+        self.storage.write(lba_id, &bytes);
+        Ok(())
+    }
+
     fn read_free_block(&self, free_block_id: &BlockId) -> Result<FreeBlock, ErrorKind> {
         let lba_id = self.id_to_lba(free_block_id.0);
         let mut bytes = [0u8; BLOCK_SIZE];
@@ -729,6 +802,20 @@ impl<T: Storage> IronFs<T> {
         self.write_free_block(&next_free_block_id, &next_free_block)?;
 
         Ok(())
+    }
+
+    pub fn create_file_handle(&mut self) -> Option<FileHandleId> {
+        if let Some((i, handle)) = self
+            .file_handles
+            .iter_mut()
+            .enumerate()
+            .find(|(i, v)| v.is_none())
+        {
+            *handle = Some(FileHandle);
+            Some(FileHandleId(i))
+        } else {
+            None
+        }
     }
 }
 
