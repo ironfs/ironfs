@@ -252,7 +252,22 @@ impl Filesystem for FuseIronFs {
         reply: ReplyData,
     ) {
         debug!("read() called for {:?}", inode);
-        reply.error(libc::ENOSYS);
+        let file_handle_id = ironfs::FileHandleId(fh);
+        let file_id = ironfs::FileId(inode as u32);
+        let mut data = vec![0u8; size as usize];
+
+        if let Ok(num_bytes_read) = self.0.read(
+            &file_handle_id,
+            &file_id,
+            offset,
+            data.as_mut_slice(),
+            current_timestamp(),
+        ) {
+            // FIXME maybe we need to return slice up to num_bytes_read.
+            reply.data(&data);
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
 
     fn write(
@@ -268,7 +283,16 @@ impl Filesystem for FuseIronFs {
         reply: ReplyWrite,
     ) {
         debug!("write() called for {:?}", inode);
-        reply.error(libc::ENOSYS);
+        let file_handle_id = ironfs::FileHandleId(fh);
+        let file_id = ironfs::FileId(inode as u32);
+        if let Ok(num_bytes_written) =
+            self.0
+                .write(&file_handle_id, &file_id, offset, data, current_timestamp())
+        {
+            reply.written(num_bytes_written as u32);
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
 
     fn release(

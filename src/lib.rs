@@ -143,6 +143,8 @@ pub struct Timestamp {
     pub nsecs: u64,
 }
 
+const NUM_BYTES_INITIAL_CONTENTS: usize = 1024;
+
 #[derive(AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct FileBlock {
@@ -158,7 +160,7 @@ struct FileBlock {
     group: u16,
     perms: u16,
     reserved: u16,
-    data: [u8; 1024],
+    data: [u8; NUM_BYTES_INITIAL_CONTENTS],
     blocks: [BlockId; 686],
 }
 
@@ -226,10 +228,12 @@ pub trait Storage {
     fn geometry(&self) -> Geometry;
 }
 
-#[derive(Clone, Copy)]
-struct FileHandle;
+struct FileHandle {
+    file_id: Option<FileId>,
+    offset: i64,
+}
 
-pub struct FileHandleId(pub usize);
+pub struct FileHandleId(pub u64);
 
 const MAX_NUM_FILE_HANDLES: usize = 16;
 
@@ -324,7 +328,7 @@ impl<T: Storage> IronFs<T> {
             storage,
             next_free_block_id: BLOCK_ID_NULL,
             is_formatted: false,
-            file_handles: [None; MAX_NUM_FILE_HANDLES],
+            file_handles: Default::default(),
         }
     }
 
@@ -810,11 +814,76 @@ impl<T: Storage> IronFs<T> {
             .enumerate()
             .find(|(i, v)| v.is_none())
         {
-            *handle = Some(FileHandle);
-            Some(FileHandleId(i))
+            *handle = Some(FileHandle {
+                file_id: None,
+                offset: 0,
+            });
+            Some(FileHandleId(i as u64))
         } else {
             None
         }
+    }
+
+    pub fn read(
+        &mut self,
+        file_handle_id: &FileHandleId,
+        file_id: &FileId,
+        offset: i64,
+        data: &mut [u8],
+        now: Timestamp,
+    ) -> Result<u64, ErrorKind> {
+        let file_handle = self.file_handles[file_handle_id.0 as usize]
+            .as_mut()
+            .unwrap();
+        file_handle.offset = core::cmp::min(0, file_handle.offset + offset);
+        let offset = file_handle.offset as usize;
+
+        let mut file_block = self.read_file_block(file_id)?;
+
+        if offset < NUM_BYTES_INITIAL_CONTENTS {
+            // Figure out how much of the data can be writen into the initial contents.
+            let max = core::cmp::min(offset + data.len(), file_block.data.len());
+
+            data.copy_from_slice(&file_block.data[offset..max]);
+        }
+
+        file_block.atime = now;
+
+        // TODO read more data into the file.
+        return Ok(data.len() as u64);
+
+        Err(ErrorKind::InconsistentState)
+    }
+
+    pub fn write(
+        &mut self,
+        file_handle_id: &FileHandleId,
+        file_id: &FileId,
+        offset: i64,
+        data: &[u8],
+        now: Timestamp,
+    ) -> Result<u64, ErrorKind> {
+        // We expect this file handle was already allocated.
+        let file_handle = self.file_handles[file_handle_id.0 as usize]
+            .as_mut()
+            .unwrap();
+        file_handle.offset = core::cmp::min(0, file_handle.offset + offset);
+        let offset = file_handle.offset as usize;
+
+        let mut file_block = self.read_file_block(file_id)?;
+
+        if offset < NUM_BYTES_INITIAL_CONTENTS {
+            // Figure out how much of the data can be writen into the initial contents.
+            let max = core::cmp::min(offset + data.len(), file_block.data.len());
+            file_block.data[offset..max].copy_from_slice(data);
+        }
+
+        file_block.mtime = now;
+        Self::fix_file_block_crc(&mut file_block);
+        self.write_file_block(&file_id, &file_block)?;
+
+        // TODO write more data into the file.
+        return Ok(data.len() as u64);
     }
 }
 
