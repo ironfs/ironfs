@@ -248,7 +248,11 @@ impl Filesystem for FuseIronFs {
 
     fn open(&mut self, req: &Request, inode: u64, flags: i32, reply: ReplyOpen) {
         debug!("open() called for {:?}", inode);
-        reply.error(libc::ENOSYS);
+        // TODO check permissions.
+        // TODO open file handles needs to be tracked.
+
+        let file_handle_id = self.create_file_handle().unwrap();
+        reply.opened(file_handle_id.0, 0);
     }
 
     fn read(
@@ -295,7 +299,7 @@ impl Filesystem for FuseIronFs {
     ) {
         debug!("write() called for {:?}", inode);
         let file_handle = self.file_handles[fh as usize].as_mut().unwrap();
-        file_handle.offset = core::cmp::min(0, file_handle.offset + offset);
+        file_handle.offset = core::cmp::max(0, file_handle.offset + offset);
         let offset = file_handle.offset as usize;
 
         let file_id = ironfs::FileId(inode as u32);
