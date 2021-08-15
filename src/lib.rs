@@ -145,6 +145,8 @@ pub struct Timestamp {
 
 const NUM_BYTES_INITIAL_CONTENTS: usize = 1024;
 
+const NUM_DATA_BLOCKS_IN_FILE: usize = 684;
+
 #[derive(AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct FileBlock {
@@ -160,8 +162,9 @@ struct FileBlock {
     group: u16,
     perms: u16,
     reserved: u16,
+    size: u64,
     data: [u8; NUM_BYTES_INITIAL_CONTENTS],
-    blocks: [BlockId; 686],
+    blocks: [BlockId; NUM_DATA_BLOCKS_IN_FILE],
 }
 
 impl FileBlock {
@@ -190,8 +193,9 @@ impl FileBlock {
             group: 0,
             perms: 0,
             reserved: 0,
+            size: 0,
             data: [0u8; 1024],
-            blocks: [BLOCK_ID_NULL; 686],
+            blocks: [BLOCK_ID_NULL; NUM_DATA_BLOCKS_IN_FILE],
         }
     }
 }
@@ -544,7 +548,7 @@ impl<T: Storage> IronFs<T> {
                 Ok(Attrs {
                     block_id: *entry,
                     kind: AttrKind::File,
-                    size: 1,
+                    size: file.size as u32,
                     atime: file.atime,
                     mtime: file.mtime,
                     ctime: file.ctime,
@@ -809,7 +813,7 @@ impl<T: Storage> IronFs<T> {
             // Figure out how much of the data can be writen into the initial contents.
             let max = core::cmp::min(offset + data.len(), file_block.data.len());
 
-            data.copy_from_slice(&file_block.data[offset..max]);
+            data[..max - offset].copy_from_slice(&file_block.data[offset..max]);
         }
 
         file_block.atime = now;
@@ -835,6 +839,10 @@ impl<T: Storage> IronFs<T> {
         }
 
         file_block.mtime = now;
+        let new_file_pos = (offset + data.len()) as u64;
+        if file_block.size < new_file_pos {
+            file_block.size = new_file_pos;
+        }
         Self::fix_file_block_crc(&mut file_block);
         self.write_file_block(&file_id, &file_block)?;
 
