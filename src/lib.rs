@@ -228,20 +228,10 @@ pub trait Storage {
     fn geometry(&self) -> Geometry;
 }
 
-struct FileHandle {
-    file_id: Option<FileId>,
-    offset: i64,
-}
-
-pub struct FileHandleId(pub u64);
-
-const MAX_NUM_FILE_HANDLES: usize = 16;
-
 pub struct IronFs<T: Storage> {
     storage: T,
     next_free_block_id: BlockId,
     is_formatted: bool,
-    file_handles: [Option<FileHandle>; MAX_NUM_FILE_HANDLES],
 }
 
 #[derive(Debug)]
@@ -328,7 +318,6 @@ impl<T: Storage> IronFs<T> {
             storage,
             next_free_block_id: BLOCK_ID_NULL,
             is_formatted: false,
-            file_handles: Default::default(),
         }
     }
 
@@ -807,37 +796,13 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
-    pub fn create_file_handle(&mut self) -> Option<FileHandleId> {
-        if let Some((i, handle)) = self
-            .file_handles
-            .iter_mut()
-            .enumerate()
-            .find(|(i, v)| v.is_none())
-        {
-            *handle = Some(FileHandle {
-                file_id: None,
-                offset: 0,
-            });
-            Some(FileHandleId(i as u64))
-        } else {
-            None
-        }
-    }
-
     pub fn read(
-        &mut self,
-        file_handle_id: &FileHandleId,
+        &self,
         file_id: &FileId,
-        offset: i64,
+        offset: usize,
         data: &mut [u8],
         now: Timestamp,
     ) -> Result<u64, ErrorKind> {
-        let file_handle = self.file_handles[file_handle_id.0 as usize]
-            .as_mut()
-            .unwrap();
-        file_handle.offset = core::cmp::min(0, file_handle.offset + offset);
-        let offset = file_handle.offset as usize;
-
         let mut file_block = self.read_file_block(file_id)?;
 
         if offset < NUM_BYTES_INITIAL_CONTENTS {
@@ -851,25 +816,16 @@ impl<T: Storage> IronFs<T> {
 
         // TODO read more data into the file.
         return Ok(data.len() as u64);
-
-        Err(ErrorKind::InconsistentState)
     }
 
     pub fn write(
         &mut self,
-        file_handle_id: &FileHandleId,
         file_id: &FileId,
-        offset: i64,
+        offset: usize,
         data: &[u8],
         now: Timestamp,
     ) -> Result<u64, ErrorKind> {
         // We expect this file handle was already allocated.
-        let file_handle = self.file_handles[file_handle_id.0 as usize]
-            .as_mut()
-            .unwrap();
-        file_handle.offset = core::cmp::min(0, file_handle.offset + offset);
-        let offset = file_handle.offset as usize;
-
         let mut file_block = self.read_file_block(file_id)?;
 
         if offset < NUM_BYTES_INITIAL_CONTENTS {

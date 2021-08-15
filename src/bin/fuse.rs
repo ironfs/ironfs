@@ -54,7 +54,18 @@ impl From<FileAttr> for fuser::FileAttr {
     }
 }
 
-struct FuseIronFs(IronFs<RamStorage>);
+struct FileHandle {
+    offset: i64,
+}
+
+pub struct FileHandleId(pub u64);
+
+const MAX_NUM_FILE_HANDLES: usize = 16;
+
+struct FuseIronFs {
+    fs: IronFs<RamStorage>,
+    file_handles: [Option<FileHandle>; MAX_NUM_FILE_HANDLES],
+}
 
 fn ironfs_error_to_libc(err_kind: ironfs::ErrorKind) -> i32 {
     match err_kind {
@@ -75,9 +86,9 @@ impl Filesystem for FuseIronFs {
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         debug!("lookup parent: {}", parent);
         let dir_id = ironfs::DirectoryId(parent as u32);
-        if let Ok(entry) = self.0.lookup(&dir_id, name.to_str().unwrap()) {
+        if let Ok(entry) = self.fs.lookup(&dir_id, name.to_str().unwrap()) {
             info!("found entry {:?} for parent {:?}", name.to_str(), parent);
-            match self.0.attrs(&entry) {
+            match self.fs.attrs(&entry) {
                 Ok(attr) => {
                     reply.entry(&Duration::new(0, 0), &FileAttr(attr).into(), 0);
                 }
@@ -95,7 +106,7 @@ impl Filesystem for FuseIronFs {
 
     fn getattr(&mut self, _req: &Request, inode: u64, reply: ReplyAttr) {
         debug!("getattr for inode: {}", inode);
-        match self.0.attrs(&ironfs::BlockId(inode as u32)) {
+        match self.fs.attrs(&ironfs::BlockId(inode as u32)) {
             Ok(attr) => {
                 reply.attr(&Duration::new(0, 0), &FileAttr(attr).into());
             }
@@ -161,7 +172,7 @@ impl Filesystem for FuseIronFs {
         let dir_id = ironfs::DirectoryId(parent as u32);
         // TODO
         if let Ok(new_dir_id) = self
-            .0
+            .fs
             .mkdir(&dir_id, name.to_str().unwrap(), current_timestamp())
         {
             let attr = fuser::FileAttr {
@@ -252,17 +263,17 @@ impl Filesystem for FuseIronFs {
         reply: ReplyData,
     ) {
         debug!("read() called for {:?}", inode);
-        let file_handle_id = ironfs::FileHandleId(fh);
+        let file_handle = self.file_handles[fh as usize].as_mut().unwrap();
+        file_handle.offset = core::cmp::min(0, file_handle.offset + offset);
+        let offset = file_handle.offset as usize;
+
         let file_id = ironfs::FileId(inode as u32);
         let mut data = vec![0u8; size as usize];
 
-        if let Ok(num_bytes_read) = self.0.read(
-            &file_handle_id,
-            &file_id,
-            offset,
-            data.as_mut_slice(),
-            current_timestamp(),
-        ) {
+        if let Ok(num_bytes_read) =
+            self.fs
+                .read(&file_id, offset, data.as_mut_slice(), current_timestamp())
+        {
             // FIXME maybe we need to return slice up to num_bytes_read.
             reply.data(&data);
         } else {
@@ -283,12 +294,12 @@ impl Filesystem for FuseIronFs {
         reply: ReplyWrite,
     ) {
         debug!("write() called for {:?}", inode);
-        let file_handle_id = ironfs::FileHandleId(fh);
+        let file_handle = self.file_handles[fh as usize].as_mut().unwrap();
+        file_handle.offset = core::cmp::min(0, file_handle.offset + offset);
+        let offset = file_handle.offset as usize;
+
         let file_id = ironfs::FileId(inode as u32);
-        if let Ok(num_bytes_written) =
-            self.0
-                .write(&file_handle_id, &file_id, offset, data, current_timestamp())
-        {
+        if let Ok(num_bytes_written) = self.fs.write(&file_id, offset, data, current_timestamp()) {
             reply.written(num_bytes_written as u32);
         } else {
             reply.error(libc::EBADF);
@@ -323,12 +334,12 @@ impl Filesystem for FuseIronFs {
         mut reply: ReplyDirectory,
     ) {
         debug!("readdir");
-        let directory_listing = self.0.readdir(ironfs::DirectoryId(inode as u32)).unwrap();
+        let directory_listing = self.fs.readdir(ironfs::DirectoryId(inode as u32)).unwrap();
         for (index, block_id) in directory_listing.skip(offset as usize).enumerate() {
             let mut name = [0u8; ironfs::NAME_NLEN];
             // TODO fix unwrap() usage.
-            self.0.block_name(&block_id, &mut name[..]).unwrap();
-            let inode_type = match self.0.block_file_type(&block_id).unwrap() {
+            self.fs.block_name(&block_id, &mut name[..]).unwrap();
+            let inode_type = match self.fs.block_file_type(&block_id).unwrap() {
                 ironfs::AttrKind::File => fuser::FileType::RegularFile,
                 ironfs::AttrKind::Directory => fuser::FileType::Directory,
             };
@@ -419,7 +430,7 @@ impl Filesystem for FuseIronFs {
 
         let dir_id = ironfs::DirectoryId(parent as u32);
         if let Ok(new_file_id) =
-            self.0
+            self.fs
                 .create(&dir_id, name.to_str().unwrap(), mode, current_timestamp())
         {
             let attr = fuser::FileAttr {
@@ -440,7 +451,7 @@ impl Filesystem for FuseIronFs {
                 flags: 0,
             };
 
-            let file_handle_id = self.0.create_file_handle().unwrap();
+            let file_handle_id = self.create_file_handle().unwrap();
             reply.created(&Duration::new(0, 0), &attr, 0, file_handle_id.0 as u64, 0);
         } else {
             reply.error(libc::EIO);
@@ -551,5 +562,29 @@ fn main() {
         }
         _ => {}
     };
-    fuser::mount2(FuseIronFs(ironfs), opt.mount_point, &fuse_options).unwrap();
+    fuser::mount2(
+        FuseIronFs {
+            fs: ironfs,
+            file_handles: Default::default(),
+        },
+        opt.mount_point,
+        &fuse_options,
+    )
+    .unwrap();
+}
+
+impl FuseIronFs {
+    pub fn create_file_handle(&mut self) -> Option<FileHandleId> {
+        if let Some((i, handle)) = self
+            .file_handles
+            .iter_mut()
+            .enumerate()
+            .find(|(i, v)| v.is_none())
+        {
+            *handle = Some(FileHandle { offset: 0 });
+            Some(FileHandleId(i as u64))
+        } else {
+            None
+        }
+    }
 }
