@@ -849,6 +849,42 @@ impl<T: Storage> IronFs<T> {
         // TODO write more data into the file.
         return Ok(data.len() as u64);
     }
+
+    pub fn unlink(
+        &mut self,
+        dir_id: &DirectoryId,
+        name: &str,
+        now: Timestamp,
+    ) -> Result<(), ErrorKind> {
+        if let Ok(block_id) = self.lookup(dir_id, name) {
+            // First remove the block from directory leaving it dangling.
+            let mut dir_block = self.read_dir_block(dir_id)?;
+            let entry = dir_block
+                .entries
+                .iter_mut()
+                .find(|v| **v == block_id)
+                .unwrap();
+            *entry = BLOCK_ID_NULL;
+            dir_block.mtime = now;
+            Self::fix_dir_block_crc(&mut dir_block);
+            self.write_dir_block(&dir_id, &dir_block)?;
+
+            // Erase all the block_id contents.
+            // This neesd to move on to next_inode etc file contents.
+            let file_block_id = FileId(block_id.0);
+            let file_block = self.read_file_block(&file_block_id)?;
+            for id in file_block.blocks {
+                if id != BLOCK_ID_NULL {
+                    self.release_free_block(id);
+                }
+            }
+            self.release_free_block(block_id);
+        } else {
+            return Err(ErrorKind::NoEntry);
+        }
+
+        Ok(())
+    }
 }
 
 fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {

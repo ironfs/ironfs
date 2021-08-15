@@ -200,7 +200,16 @@ impl Filesystem for FuseIronFs {
 
     fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         debug!("unlink");
-        reply.error(libc::ENOSYS);
+        let dir_id = ironfs::DirectoryId(parent as u32);
+        match self
+            .fs
+            .unlink(&dir_id, name.to_str().unwrap(), current_timestamp())
+        {
+            Ok(_) => reply.ok(),
+            Err(_) => {
+                unreachable!();
+            }
+        }
     }
 
     fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
