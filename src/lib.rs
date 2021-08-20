@@ -128,12 +128,35 @@ struct ExtDirBlock {
     data: [BlockId; 1021],
 }
 
-#[derive(AsBytes, FromBytes)]
+const NUM_DATA_BLOCK_BYTES: usize = 4088;
+
+#[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(packed)]
 struct DataBlock {
     magic: BlockMagic,
     crc: Crc,
-    data: [u8; 4088],
+    data: [u8; NUM_DATA_BLOCK_BYTES],
+}
+
+impl Default for DataBlock {
+    fn default() -> Self {
+        DataBlock {
+            magic: DATA_BLOCK_MAGIC,
+            crc: CRC_INIT,
+            data: [0u8; 4088],
+        }
+    }
+}
+
+impl DataBlock {
+    fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
+        let block: Option<LayoutVerified<_, DataBlock>> = LayoutVerified::new(bytes);
+        if let Some(block) = block {
+            return Ok((*block).clone());
+        }
+
+        return Err(ErrorKind::InconsistentState);
+    }
 }
 
 #[derive(Copy, Debug, AsBytes, FromBytes, Clone)]
@@ -642,6 +665,13 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
+    fn read_data_block(&self, entry: &BlockId) -> Result<DataBlock, ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0);
+        let mut bytes = [0u8; BLOCK_SIZE];
+        self.storage.read(lba_id, &mut bytes);
+        DataBlock::try_from_bytes(&bytes[..])
+    }
+
     fn read_dir_block(&self, entry: &DirectoryId) -> Result<DirBlock, ErrorKind> {
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
@@ -694,6 +724,11 @@ impl<T: Storage> IronFs<T> {
         free_block.crc = Crc(CRC.checksum(free_block.as_bytes()));
     }
 
+    fn fix_data_block_crc(data_block: &mut DataBlock) {
+        data_block.crc = CRC_INIT;
+        data_block.crc = Crc(CRC.checksum(data_block.as_bytes()));
+    }
+
     fn fix_dir_block_crc(dir_block: &mut DirBlock) {
         dir_block.crc = CRC_INIT;
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
@@ -702,6 +737,13 @@ impl<T: Storage> IronFs<T> {
     fn fix_file_block_crc(file_block: &mut FileBlock) {
         file_block.crc = CRC_INIT;
         file_block.crc = Crc(CRC.checksum(file_block.as_bytes()));
+    }
+
+    fn write_data_block(&mut self, entry: &BlockId, data: &DataBlock) -> Result<(), ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0);
+        let bytes = data.as_bytes();
+        self.storage.write(lba_id, &bytes);
+        Ok(())
     }
 
     fn write_dir_block(
@@ -832,10 +874,33 @@ impl<T: Storage> IronFs<T> {
         // We expect this file handle was already allocated.
         let mut file_block = self.read_file_block(file_id)?;
 
-        if offset < NUM_BYTES_INITIAL_CONTENTS {
+        let mut pos = 0;
+        let end = pos + data.len();
+        if (pos + offset) < NUM_BYTES_INITIAL_CONTENTS {
             // Figure out how much of the data can be writen into the initial contents.
-            let max = core::cmp::min(offset + data.len(), file_block.data.len());
-            file_block.data[offset..max].copy_from_slice(data);
+            let max = core::cmp::min(end - pos, file_block.data.len());
+            file_block.data[pos + offset..max + offset].copy_from_slice(&data[pos..max]);
+            pos += max;
+        }
+
+        while pos < end {
+            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / BLOCK_SIZE;
+            let (data_block_id, mut data_block) = if file_block.blocks[idx] == BLOCK_ID_NULL {
+                let id = self.acquire_free_block()?;
+                file_block.blocks[idx] = id;
+                (id, DataBlock::default())
+            } else {
+                let id = file_block.blocks[idx];
+                (id, self.read_data_block(&id)?)
+            };
+            let pos_in_block = (pos - offset + NUM_BYTES_INITIAL_CONTENTS) % BLOCK_SIZE;
+            let num_bytes = core::cmp::min(NUM_DATA_BLOCK_BYTES - pos_in_block, end - pos);
+            data_block.data[pos_in_block..pos_in_block + num_bytes]
+                .copy_from_slice(&data[pos..pos + num_bytes]);
+            Self::fix_data_block_crc(&mut data_block);
+            self.write_data_block(&data_block_id, &data_block)?;
+
+            pos += num_bytes;
         }
 
         file_block.mtime = now;
