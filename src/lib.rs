@@ -48,29 +48,31 @@ struct Crc(u32);
 const CRC_INIT: Crc = Crc(0x00000000);
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(packed)]
+#[repr(C)]
 struct GenericBlock {
     magic: BlockMagic,
     crc: Crc,
 }
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(packed)]
+#[repr(C)]
 struct SuperBlock {
     magic: BlockMagic,
     crc: Crc,
     ext_magic: [u8; 12],
+    reserved1: [u8; 4],
     version: u32,
     root_dir_block: BlockId,
     num_blocks: u32,
     block_size: u32,
     created_on: Timestamp,
+    reserved2: [u8; 4040],
 }
 
-const DIR_BLOCK_NUM_ENTRIES: usize = 942;
+const DIR_BLOCK_NUM_ENTRIES: usize = 940;
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(packed)]
+#[repr(C)]
 struct DirBlock {
     magic: BlockMagic,
     crc: Crc,
@@ -80,10 +82,11 @@ struct DirBlock {
     atime: Timestamp,
     mtime: Timestamp,
     ctime: Timestamp,
+    reserved1: u64,
     owner: u16,
     group: u16,
     perms: u16,
-    reserved1: u16,
+    reserved2: u16,
     entries: [BlockId; DIR_BLOCK_NUM_ENTRIES],
 }
 
@@ -114,24 +117,26 @@ impl DirBlock {
             group: 0,
             perms: 0,
             reserved1: 0,
+            reserved2: 0,
             entries: [BLOCK_ID_NULL; DIR_BLOCK_NUM_ENTRIES],
         }
     }
 }
 
 #[derive(AsBytes, FromBytes)]
-#[repr(packed)]
+#[repr(C)]
 struct ExtDirBlock {
     magic: BlockMagic,
     crc: Crc,
     next_dir_block: BlockId,
-    data: [BlockId; 1021],
+    reserved: u32,
+    data: [BlockId; 1020],
 }
 
 const NUM_DATA_BLOCK_BYTES: usize = 4088;
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(packed)]
+#[repr(C)]
 struct DataBlock {
     magic: BlockMagic,
     crc: Crc,
@@ -160,7 +165,7 @@ impl DataBlock {
 }
 
 #[derive(Copy, Debug, AsBytes, FromBytes, Clone)]
-#[repr(packed)]
+#[repr(C)]
 pub struct Timestamp {
     pub secs: i64,
     pub nsecs: u64,
@@ -171,7 +176,7 @@ const NUM_BYTES_INITIAL_CONTENTS: usize = 1024;
 const NUM_DATA_BLOCKS_IN_FILE: usize = 684;
 
 #[derive(AsBytes, FromBytes, Clone)]
-#[repr(packed)]
+#[repr(C)]
 struct FileBlock {
     magic: BlockMagic,
     crc: Crc,
@@ -223,17 +228,43 @@ impl FileBlock {
     }
 }
 
-#[derive(AsBytes, FromBytes)]
-#[repr(packed)]
+const EXT_FILE_BLOCK_NUM_BLOCKS: usize = 1020;
+
+#[derive(Debug, AsBytes, FromBytes, Clone)]
+#[repr(C)]
 struct ExtFileBlock {
     magic: BlockMagic,
     crc: Crc,
     next_inode: BlockId,
-    blocks: [BlockId; 1021],
+    reserved: u32,
+    blocks: [BlockId; EXT_FILE_BLOCK_NUM_BLOCKS],
+}
+
+impl ExtFileBlock {
+    fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
+        let block: Option<LayoutVerified<_, ExtFileBlock>> = LayoutVerified::new(bytes);
+        if let Some(block) = block {
+            return Ok((*block).clone());
+        }
+
+        return Err(ErrorKind::InconsistentState);
+    }
+}
+
+impl Default for ExtFileBlock {
+    fn default() -> Self {
+        ExtFileBlock {
+            magic: EXT_FILE_BLOCK_MAGIC,
+            crc: CRC_INIT,
+            next_inode: BLOCK_ID_NULL,
+            reserved: 0,
+            blocks: [BLOCK_ID_NULL; EXT_FILE_BLOCK_NUM_BLOCKS],
+        }
+    }
 }
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(packed)]
+#[repr(C)]
 struct FreeBlock {
     magic: BlockMagic,
     crc: Crc,
@@ -388,13 +419,14 @@ impl<T: Storage> IronFs<T> {
         let mut super_block = SuperBlock {
             magic: SUPER_BLOCK_MAGIC,
             ext_magic: EXT_SUPER_BLOCK_MAGIC,
+            reserved1: [0u8; 4],
             version: IRONFS_VERSION,
             root_dir_block: BlockId(1),
             num_blocks,
             block_size: BLOCK_SIZE as u32,
-            // TODO
-            created_on: Timestamp { secs: 0, nsecs: 0 },
+            created_on: now,
             crc: CRC_INIT,
+            reserved2: [0u8; 4040],
         };
         super_block.crc = Crc(CRC.checksum(super_block.as_bytes()));
         self.write_super_block(&super_block)?;
@@ -695,12 +727,18 @@ impl<T: Storage> IronFs<T> {
         }
     }
 
+    fn read_ext_file_block(&self, entry: &BlockId) -> Result<ExtFileBlock, ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0);
+        let mut bytes = [0u8; BLOCK_SIZE];
+        self.storage.read(lba_id, &mut bytes);
+        ExtFileBlock::try_from_bytes(&bytes[..])
+    }
+
     fn read_super_block(&mut self) -> Result<SuperBlock, ErrorKind> {
         let mut bytes = [0u8; BLOCK_SIZE];
         self.storage.read(LbaId(0), &mut bytes);
-        let block: Option<(LayoutVerified<_, SuperBlock>, &[u8])> =
-            LayoutVerified::new_from_prefix(&bytes[..]);
-        if let Some((block, _)) = block {
+        let block: Option<LayoutVerified<_, SuperBlock>> = LayoutVerified::new(&bytes[..]);
+        if let Some(block) = block {
             if block.magic != SUPER_BLOCK_MAGIC {
                 debug!("Failed to read proper super block magic.");
                 return Err(ErrorKind::InconsistentState);
@@ -739,6 +777,11 @@ impl<T: Storage> IronFs<T> {
         file_block.crc = Crc(CRC.checksum(file_block.as_bytes()));
     }
 
+    fn fix_ext_file_block_crc(ext_file_block: &mut ExtFileBlock) {
+        ext_file_block.crc = CRC_INIT;
+        ext_file_block.crc = Crc(CRC.checksum(ext_file_block.as_bytes()));
+    }
+
     fn write_data_block(&mut self, entry: &BlockId, data: &DataBlock) -> Result<(), ErrorKind> {
         let lba_id = self.id_to_lba(entry.0);
         let bytes = data.as_bytes();
@@ -760,6 +803,17 @@ impl<T: Storage> IronFs<T> {
     fn write_file_block(&mut self, entry: &FileId, file: &FileBlock) -> Result<(), ErrorKind> {
         let lba_id = self.id_to_lba(entry.0);
         let bytes = file.as_bytes();
+        self.storage.write(lba_id, &bytes);
+        Ok(())
+    }
+
+    fn write_ext_file_block(
+        &mut self,
+        entry: &BlockId,
+        ext_file: &ExtFileBlock,
+    ) -> Result<(), ErrorKind> {
+        let lba_id = self.id_to_lba(entry.0);
+        let bytes = ext_file.as_bytes();
         self.storage.write(lba_id, &bytes);
         Ok(())
     }
@@ -861,7 +915,7 @@ impl<T: Storage> IronFs<T> {
             pos += nbytes
         }
 
-        while pos < end {
+        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES) {
             let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / NUM_DATA_BLOCK_BYTES;
             let data_block_id = file_block.blocks[idx];
             let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % NUM_DATA_BLOCK_BYTES;
@@ -880,9 +934,10 @@ impl<T: Storage> IronFs<T> {
             pos += num_bytes;
         }
 
+        // TODO handle extended file block.
+
         file_block.atime = now;
 
-        // TODO read more data into the file.
         return Ok(data.len() as u64);
     }
 
@@ -905,7 +960,7 @@ impl<T: Storage> IronFs<T> {
             pos += nbytes;
         }
 
-        while pos < end {
+        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES) {
             let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / NUM_DATA_BLOCK_BYTES;
             let (data_block_id, mut data_block) = if file_block.blocks[idx] == BLOCK_ID_NULL {
                 let id = self.acquire_free_block()?;
@@ -923,6 +978,57 @@ impl<T: Storage> IronFs<T> {
             self.write_data_block(&data_block_id, &data_block)?;
 
             pos += num_bytes;
+        }
+
+        if (pos + offset) > (NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES) {
+            let (mut ext_file_block_id, mut ext_file_block) =
+                if file_block.next_inode == BLOCK_ID_NULL {
+                    file_block.next_inode = self.acquire_free_block()?;
+                    (file_block.next_inode, ExtFileBlock::default())
+                } else {
+                    (
+                        file_block.next_inode,
+                        self.read_ext_file_block(&file_block.next_inode)?,
+                    )
+                };
+
+            while pos < end {
+                let idx = (pos + offset) / NUM_DATA_BLOCK_BYTES;
+                let (data_block_id, mut data_block) = if ext_file_block.blocks[idx] == BLOCK_ID_NULL
+                {
+                    let id = self.acquire_free_block()?;
+                    ext_file_block.blocks[idx] = id;
+                    (id, DataBlock::default())
+                } else {
+                    let id = ext_file_block.blocks[idx];
+                    (id, self.read_data_block(&id)?)
+                };
+                let pos_in_block = (pos + offset) % NUM_DATA_BLOCK_BYTES;
+                let num_bytes = core::cmp::min(NUM_DATA_BLOCK_BYTES - pos_in_block, end - pos);
+                data_block.data[pos_in_block..pos_in_block + num_bytes]
+                    .copy_from_slice(&data[pos..pos + num_bytes]);
+                Self::fix_data_block_crc(&mut data_block);
+                self.write_data_block(&data_block_id, &data_block)?;
+
+                pos += num_bytes;
+
+                if ((pos + offset) / NUM_DATA_BLOCK_BYTES) >= EXT_FILE_BLOCK_NUM_BLOCKS {
+                    Self::fix_ext_file_block_crc(&mut ext_file_block);
+                    self.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
+                    // We need to allocate another ext file block to account for more block
+                    // storage.
+                    if pos < end {
+                        if ext_file_block.next_inode == BLOCK_ID_NULL {
+                            ext_file_block.next_inode = self.acquire_free_block()?;
+                            ext_file_block_id = ext_file_block.next_inode;
+                            ext_file_block = ExtFileBlock::default();
+                        } else {
+                            ext_file_block_id = ext_file_block.next_inode;
+                            ext_file_block = self.read_ext_file_block(&ext_file_block_id)?;
+                        }
+                    }
+                }
+            }
         }
 
         file_block.mtime = now;
@@ -1011,6 +1117,11 @@ mod tests {
     #[test]
     fn valid_ext_dir_block_size() {
         assert_eq!(core::mem::size_of::<ExtDirBlock>(), BLOCK_SIZE);
+    }
+
+    #[test]
+    fn valid_super_block_size() {
+        assert_eq!(core::mem::size_of::<SuperBlock>(), BLOCK_SIZE);
     }
 
     #[test]
