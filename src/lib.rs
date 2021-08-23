@@ -1,4 +1,4 @@
-#![no_std]
+//#![no_std]
 
 use log::{debug, error, info, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
@@ -568,6 +568,7 @@ impl<T: Storage> IronFs<T> {
             Some(BlockMagicType::FileBlock) => {
                 let file = FileBlock::try_from_bytes(&bytes[..])
                     .expect("failure to convert bytes to file block");
+                println!("size: {}", file.size);
                 Ok(Attrs {
                     block_id: *entry,
                     kind: AttrKind::File,
@@ -851,11 +852,41 @@ impl<T: Storage> IronFs<T> {
     ) -> Result<u64, ErrorKind> {
         let mut file_block = self.read_file_block(file_id)?;
 
+        let mut pos = 0;
+        let end = data.len();
+
         if offset < NUM_BYTES_INITIAL_CONTENTS {
             // Figure out how much of the data can be writen into the initial contents.
-            let max = core::cmp::min(offset + data.len(), file_block.data.len());
+            let nbytes = core::cmp::min(end - pos, file_block.data.len() - offset);
+            data[..nbytes].copy_from_slice(&file_block.data[offset..offset + nbytes]);
+            pos += nbytes
+        }
 
-            data[..max - offset].copy_from_slice(&file_block.data[offset..max]);
+        while pos < end {
+            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / NUM_DATA_BLOCK_BYTES;
+            let data_block_id = file_block.blocks[idx];
+            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % NUM_DATA_BLOCK_BYTES;
+            let num_bytes = core::cmp::min(NUM_DATA_BLOCK_BYTES - pos_in_block, end - pos);
+            println!(
+                "read pos: {} offset: {} idx: {} pos_in_block: {} num_bytes: {}",
+                pos, offset, idx, pos_in_block, num_bytes
+            );
+
+            if data_block_id == BLOCK_ID_NULL {
+                data[pos..pos + num_bytes].fill(0u8);
+            } else {
+                let data_block = self.read_data_block(&data_block_id)?;
+                // TODO verify CRC.
+
+                data[pos..pos + num_bytes]
+                    .copy_from_slice(&data_block.data[pos_in_block..pos_in_block + num_bytes]);
+                let txt = String::from_utf8_lossy(
+                    &data_block.data[pos_in_block..pos_in_block + num_bytes],
+                );
+                println!("{}", txt);
+            }
+
+            pos += num_bytes;
         }
 
         file_block.atime = now;
@@ -873,18 +904,19 @@ impl<T: Storage> IronFs<T> {
     ) -> Result<u64, ErrorKind> {
         // We expect this file handle was already allocated.
         let mut file_block = self.read_file_block(file_id)?;
+        println!("offset: {}, data len: {}", offset, data.len());
 
         let mut pos = 0;
-        let end = pos + data.len();
-        if (pos + offset) < NUM_BYTES_INITIAL_CONTENTS {
+        let end = data.len();
+        if offset < NUM_BYTES_INITIAL_CONTENTS {
             // Figure out how much of the data can be writen into the initial contents.
-            let max = core::cmp::min(end - pos, file_block.data.len());
-            file_block.data[pos + offset..max + offset].copy_from_slice(&data[pos..max]);
-            pos += max;
+            let nbytes = core::cmp::min(end - pos, file_block.data.len() - offset);
+            file_block.data[offset..offset + nbytes].copy_from_slice(&data[pos..nbytes]);
+            pos += nbytes;
         }
 
         while pos < end {
-            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / BLOCK_SIZE;
+            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / NUM_DATA_BLOCK_BYTES;
             let (data_block_id, mut data_block) = if file_block.blocks[idx] == BLOCK_ID_NULL {
                 let id = self.acquire_free_block()?;
                 file_block.blocks[idx] = id;
@@ -893,10 +925,17 @@ impl<T: Storage> IronFs<T> {
                 let id = file_block.blocks[idx];
                 (id, self.read_data_block(&id)?)
             };
-            let pos_in_block = (pos - offset + NUM_BYTES_INITIAL_CONTENTS) % BLOCK_SIZE;
+            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % NUM_DATA_BLOCK_BYTES;
             let num_bytes = core::cmp::min(NUM_DATA_BLOCK_BYTES - pos_in_block, end - pos);
+            println!(
+                "write pos: {} offset: {} idx: {} pos_in_block: {} num_bytes: {}",
+                pos, offset, idx, pos_in_block, num_bytes
+            );
             data_block.data[pos_in_block..pos_in_block + num_bytes]
                 .copy_from_slice(&data[pos..pos + num_bytes]);
+            let txt =
+                String::from_utf8_lossy(&data_block.data[pos_in_block..pos_in_block + num_bytes]);
+            println!("{}", txt);
             Self::fix_data_block_crc(&mut data_block);
             self.write_data_block(&data_block_id, &data_block)?;
 
@@ -908,6 +947,7 @@ impl<T: Storage> IronFs<T> {
         if file_block.size < new_file_pos {
             file_block.size = new_file_pos;
         }
+        println!("new file pos: {}", new_file_pos);
         Self::fix_file_block_crc(&mut file_block);
         self.write_file_block(&file_id, &file_block)?;
 
