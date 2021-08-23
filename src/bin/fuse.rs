@@ -275,8 +275,10 @@ impl Filesystem for FuseIronFs {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        debug!("read() called for {:?}", inode);
-        println!("fuse read offset {} size {}", offset, size);
+        debug!(
+            "read() called for {:?} offset {} size {}",
+            inode, offset, size
+        );
         let file_handle = self.file_handles[fh as usize].as_mut().unwrap();
         file_handle.offset = core::cmp::max(0, offset);
         let offset = file_handle.offset as usize;
@@ -307,15 +309,13 @@ impl Filesystem for FuseIronFs {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        debug!("write() called for {:?}", inode);
-        println!("offset: {}", offset);
+        debug!("write() called for {:?} offset {}", inode, offset);
         let file_handle = self.file_handles[fh as usize].as_mut().unwrap();
         file_handle.offset = core::cmp::max(0, offset);
         let offset = file_handle.offset as usize;
 
         let file_id = ironfs::FileId(inode as u32);
         if let Ok(num_bytes_written) = self.fs.write(&file_id, offset, data, current_timestamp()) {
-            println!("wrote: {}", num_bytes_written);
             reply.written(num_bytes_written as u32);
         } else {
             reply.error(libc::EBADF);
