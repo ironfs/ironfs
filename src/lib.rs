@@ -939,12 +939,16 @@ impl<T: Storage> IronFs<T> {
                 >= (NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES)
         {
             // We're now reading data in the extended file block area.
-            let mut ext_file_block_inode = file_block.next_inode;
-            let mut ext_file_block = self.read_ext_file_block(&ext_file_block_inode)?;
             let mut ext_file_block_idx = (pos + offset
                 - NUM_BYTES_INITIAL_CONTENTS
                 - NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES)
                 / (EXT_FILE_BLOCK_NUM_BLOCKS * NUM_DATA_BLOCK_BYTES);
+            let mut ext_file_block_inode = file_block.next_inode;
+            let mut ext_file_block = self.read_ext_file_block(&ext_file_block_inode)?;
+            for _ in 0..ext_file_block_idx {
+                ext_file_block_inode = ext_file_block.next_inode;
+                ext_file_block = self.read_ext_file_block(&ext_file_block_inode)?;
+            }
 
             while pos < end && ext_file_block_inode != BLOCK_ID_NULL {
                 let mut pos_in_ext_file = pos + offset
@@ -1035,6 +1039,17 @@ impl<T: Storage> IronFs<T> {
                         self.read_ext_file_block(&file_block.next_inode)?,
                     )
                 };
+            for _ in 0..ext_file_block_idx {
+                ext_file_block_id = ext_file_block.next_inode;
+                if ext_file_block_id == BLOCK_ID_NULL {
+                    ext_file_block.next_inode = self.acquire_free_block()?;
+                    trace!("carving new block: {:?}", ext_file_block.next_inode);
+                    Self::fix_ext_file_block_crc(&mut ext_file_block);
+                    self.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
+                    ext_file_block_id = ext_file_block.next_inode;
+                }
+                ext_file_block = self.read_ext_file_block(&ext_file_block_id)?;
+            }
 
             while pos < end {
                 let mut pos_in_ext_file = pos + offset
