@@ -547,6 +547,7 @@ use structopt::StructOpt;
 #[derive(StructOpt)]
 struct Opt {
     mount_point: String,
+    num_bytes: Option<usize>,
 }
 
 fn main() {
@@ -564,8 +565,8 @@ fn main() {
         MountOption::NoAtime,
     ];
 
-    //let storage = RamStorage::new(33554432);
-    let mut ironfs = IronFs::from(RamStorage::new(33554432));
+    let num_bytes = opt.num_bytes.unwrap_or(33554432);
+    let mut ironfs = IronFs::from(RamStorage::new(num_bytes));
     debug!("First bind");
     match ironfs.bind() {
         Err(ironfs::ErrorKind::NotFormatted) => {
