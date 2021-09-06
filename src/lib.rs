@@ -1040,15 +1040,17 @@ impl<T: Storage> IronFs<T> {
                     )
                 };
             for _ in 0..ext_file_block_idx {
-                ext_file_block_id = ext_file_block.next_inode;
-                if ext_file_block_id == BLOCK_ID_NULL {
+                if ext_file_block.next_inode == BLOCK_ID_NULL {
                     ext_file_block.next_inode = self.acquire_free_block()?;
                     trace!("carving new block: {:?}", ext_file_block.next_inode);
                     Self::fix_ext_file_block_crc(&mut ext_file_block);
                     self.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
                     ext_file_block_id = ext_file_block.next_inode;
+                    ext_file_block = ExtFileBlock::default();
+                } else {
+                    ext_file_block_id = ext_file_block.next_inode;
+                    ext_file_block = self.read_ext_file_block(&ext_file_block_id)?;
                 }
-                ext_file_block = self.read_ext_file_block(&ext_file_block_id)?;
             }
 
             while pos < end {
