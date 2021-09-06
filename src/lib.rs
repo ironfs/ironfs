@@ -99,6 +99,11 @@ impl DirBlock {
 
         return Err(ErrorKind::InconsistentState);
     }
+
+    fn fix_crc(&mut self) {
+        self.crc = CRC_INIT;
+        self.crc = Crc(CRC.checksum(self.as_bytes()));
+    }
 }
 
 impl DirBlock {
@@ -162,6 +167,11 @@ impl DataBlock {
 
         return Err(ErrorKind::InconsistentState);
     }
+
+    fn fix_crc(&mut self) {
+        self.crc = CRC_INIT;
+        self.crc = Crc(CRC.checksum(self.as_bytes()));
+    }
 }
 
 #[derive(Copy, Debug, AsBytes, FromBytes, Clone)]
@@ -203,6 +213,11 @@ impl FileBlock {
         }
 
         return Err(ErrorKind::InconsistentState);
+    }
+
+    fn fix_crc(&mut self) {
+        self.crc = CRC_INIT;
+        self.crc = Crc(CRC.checksum(self.as_bytes()));
     }
 }
 
@@ -249,6 +264,11 @@ impl ExtFileBlock {
 
         return Err(ErrorKind::InconsistentState);
     }
+
+    fn fix_crc(&mut self) {
+        self.crc = CRC_INIT;
+        self.crc = Crc(CRC.checksum(self.as_bytes()));
+    }
 }
 
 impl Default for ExtFileBlock {
@@ -270,6 +290,13 @@ struct FreeBlock {
     crc: Crc,
     next_free_id: BlockId,
     prev_free_id: BlockId,
+}
+
+impl FreeBlock {
+    fn fix_crc(&mut self) {
+        self.crc = CRC_INIT;
+        self.crc = Crc(CRC.checksum(self.as_bytes()));
+    }
 }
 
 pub struct Geometry {
@@ -456,7 +483,7 @@ impl<T: Storage> IronFs<T> {
                 next_free_id,
                 prev_free_id,
             };
-            Self::fix_free_block_crc(&mut free_block);
+            free_block.fix_crc();
 
             self.write_free_block(&BlockId(i), &free_block)?;
         }
@@ -539,13 +566,13 @@ impl<T: Storage> IronFs<T> {
             new_file_block.name_len = name.len() as u32;
             new_file_block.name[..name.len()].copy_from_slice(name.as_bytes());
             let new_file_block_id = FileId(id.0);
-            Self::fix_file_block_crc(&mut new_file_block);
+            new_file_block.fix_crc();
             self.write_file_block(&new_file_block_id, &new_file_block)?;
             trace!("create: wrote new file");
 
             *v = BlockId(id.0);
             existing_directory.mtime = now;
-            Self::fix_dir_block_crc(&mut existing_directory);
+            existing_directory.fix_crc();
             self.write_dir_block(&parent, &existing_directory)?;
             trace!("create: wrote existing directory");
             return Ok(new_file_block_id);
@@ -577,12 +604,12 @@ impl<T: Storage> IronFs<T> {
             new_directory_block.name_len = name.len() as u32;
             new_directory_block.name[..name.len()].copy_from_slice(name.as_bytes());
             let new_directory_block_id = DirectoryId(id.0);
-            Self::fix_dir_block_crc(&mut new_directory_block);
+            new_directory_block.fix_crc();
             self.write_dir_block(&new_directory_block_id, &new_directory_block)?;
             trace!("mkdir: wrote new directory");
             *v = BlockId(id.0);
             existing_directory.mtime = now;
-            Self::fix_dir_block_crc(&mut existing_directory);
+            existing_directory.fix_crc();
             self.write_dir_block(&dir_id, &existing_directory)?;
             trace!("mkdir: wrote existing directory");
             return Ok(new_directory_block_id);
@@ -757,31 +784,6 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
-    fn fix_free_block_crc(free_block: &mut FreeBlock) {
-        free_block.crc = CRC_INIT;
-        free_block.crc = Crc(CRC.checksum(free_block.as_bytes()));
-    }
-
-    fn fix_data_block_crc(data_block: &mut DataBlock) {
-        data_block.crc = CRC_INIT;
-        data_block.crc = Crc(CRC.checksum(data_block.as_bytes()));
-    }
-
-    fn fix_dir_block_crc(dir_block: &mut DirBlock) {
-        dir_block.crc = CRC_INIT;
-        dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
-    }
-
-    fn fix_file_block_crc(file_block: &mut FileBlock) {
-        file_block.crc = CRC_INIT;
-        file_block.crc = Crc(CRC.checksum(file_block.as_bytes()));
-    }
-
-    fn fix_ext_file_block_crc(ext_file_block: &mut ExtFileBlock) {
-        ext_file_block.crc = CRC_INIT;
-        ext_file_block.crc = Crc(CRC.checksum(ext_file_block.as_bytes()));
-    }
-
     fn write_data_block(&mut self, entry: &BlockId, data: &DataBlock) -> Result<(), ErrorKind> {
         let lba_id = self.id_to_lba(entry.0);
         let bytes = data.as_bytes();
@@ -859,8 +861,8 @@ impl<T: Storage> IronFs<T> {
         let mut next_free_block = self.read_free_block(&free_block.next_free_id)?;
         prev_free_block.next_free_id = free_block.next_free_id;
         next_free_block.prev_free_id = free_block.prev_free_id;
-        Self::fix_free_block_crc(&mut prev_free_block);
-        Self::fix_free_block_crc(&mut next_free_block);
+        prev_free_block.fix_crc();
+        next_free_block.fix_crc();
         self.write_free_block(&free_block.prev_free_id, &prev_free_block)?;
         self.write_free_block(&free_block.next_free_id, &next_free_block)?;
 
@@ -886,9 +888,9 @@ impl<T: Storage> IronFs<T> {
 
         next_free_block.prev_free_id = cur_free_block_id;
         prev_free_block.next_free_id = cur_free_block_id;
-        Self::fix_free_block_crc(&mut prev_free_block);
-        Self::fix_free_block_crc(&mut cur_free_block);
-        Self::fix_free_block_crc(&mut next_free_block);
+        prev_free_block.fix_crc();
+        cur_free_block.fix_crc();
+        next_free_block.fix_crc();
         self.write_free_block(&prev_free_block_id, &prev_free_block)?;
         self.write_free_block(&cur_free_block_id, &cur_free_block)?;
         self.write_free_block(&next_free_block_id, &next_free_block)?;
@@ -1016,7 +1018,7 @@ impl<T: Storage> IronFs<T> {
             let num_bytes = core::cmp::min(NUM_DATA_BLOCK_BYTES - pos_in_block, end - pos);
             data_block.data[pos_in_block..pos_in_block + num_bytes]
                 .copy_from_slice(&data[pos..pos + num_bytes]);
-            Self::fix_data_block_crc(&mut data_block);
+            data_block.fix_crc();
             self.write_data_block(&data_block_id, &data_block)?;
 
             pos += num_bytes;
@@ -1043,7 +1045,7 @@ impl<T: Storage> IronFs<T> {
                 if ext_file_block.next_inode == BLOCK_ID_NULL {
                     ext_file_block.next_inode = self.acquire_free_block()?;
                     trace!("carving new block: {:?}", ext_file_block.next_inode);
-                    Self::fix_ext_file_block_crc(&mut ext_file_block);
+                    ext_file_block.fix_crc();
                     self.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
                     ext_file_block_id = ext_file_block.next_inode;
                     ext_file_block = ExtFileBlock::default();
@@ -1072,7 +1074,7 @@ impl<T: Storage> IronFs<T> {
                 let num_bytes = core::cmp::min(NUM_DATA_BLOCK_BYTES - pos_in_block, end - pos);
                 data_block.data[pos_in_block..pos_in_block + num_bytes]
                     .copy_from_slice(&data[pos..pos + num_bytes]);
-                Self::fix_data_block_crc(&mut data_block);
+                data_block.fix_crc();
                 self.write_data_block(&data_block_id, &data_block)?;
 
                 pos += num_bytes;
@@ -1080,7 +1082,7 @@ impl<T: Storage> IronFs<T> {
                 if pos_in_ext_file >= (EXT_FILE_BLOCK_NUM_BLOCKS * NUM_DATA_BLOCK_BYTES)
                     || pos == end
                 {
-                    Self::fix_ext_file_block_crc(&mut ext_file_block);
+                    ext_file_block.fix_crc();
                     self.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
                     ext_file_block_idx += 1;
                     // We need to allocate another ext file block to account for more block
@@ -1104,7 +1106,7 @@ impl<T: Storage> IronFs<T> {
         if file_block.size < new_file_pos {
             file_block.size = new_file_pos;
         }
-        Self::fix_file_block_crc(&mut file_block);
+        file_block.fix_crc();
         self.write_file_block(&file_id, &file_block)?;
 
         // TODO write more data into the file.
@@ -1127,7 +1129,7 @@ impl<T: Storage> IronFs<T> {
                 .unwrap();
             *entry = BLOCK_ID_NULL;
             dir_block.mtime = now;
-            Self::fix_dir_block_crc(&mut dir_block);
+            dir_block.fix_crc();
             self.write_dir_block(&dir_id, &dir_block)?;
 
             // Erase all the block_id contents.
