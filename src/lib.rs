@@ -1336,6 +1336,26 @@ mod tests {
     }
 
     #[test]
+    fn test_ext_file_block_write_all_offset() {
+        let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
+        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+
+        for i in 0..ExtFileBlock::avail_bytes() {
+            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
+            let mut block = ExtFileBlock::default();
+            block.write(&mut ironfs, i, &data[..]).unwrap();
+            let mut data2 = vec![0u8; ExtFileBlock::avail_bytes()];
+            block.read(&ironfs, 0, &mut data2[..]).unwrap();
+            for j in 0..i {
+                assert_eq!(data2[j], 0u8);
+            }
+            for j in i..ExtFileBlock::avail_bytes() {
+                assert_eq!(data2[j], data[j - i]);
+            }
+        }
+    }
+
+    #[test]
     fn test_ext_file_block_read() {
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(29)));
         let mut ext_file_block = ExtFileBlock::default();
