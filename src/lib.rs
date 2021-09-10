@@ -1364,6 +1364,24 @@ mod tests {
     }
 
     #[test]
+    fn test_data_block_write_all_offset() {
+        let data: Vec<usize> = (0..DataBlock::avail_bytes()).collect();
+        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+        for i in 0..data.len() {
+            let mut data_block = DataBlock::default();
+            data_block.write(i, &data[..]).unwrap();
+            let mut data2 = vec![0u8; DataBlock::avail_bytes()];
+            data_block.read(0, &mut data2[..]).unwrap();
+            for j in 0..i {
+                assert_eq!(data2[j], 0u8);
+            }
+            for j in i..DataBlock::avail_bytes() {
+                assert_eq!(data2[j], data[j - i]);
+            }
+        }
+    }
+
+    #[test]
     fn test_data_block_read() {
         let mut data_block = DataBlock::default();
         let data: Vec<usize> = (0..NUM_DATA_BLOCK_BYTES).collect();
