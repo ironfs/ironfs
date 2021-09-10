@@ -304,7 +304,7 @@ impl ExtFileBlock {
 
         let data_len = core::cmp::min(ExtFileBlock::avail_bytes() - offset, data.len());
 
-        for i in idx..idx + (data_len / DataBlock::avail_bytes()) + 1 {
+        for i in idx..idx + (data_len / DataBlock::avail_bytes()) {
             let (data_block_id, mut data_block) = if self.blocks[i] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
                 self.blocks[i] = id;
@@ -339,7 +339,7 @@ impl ExtFileBlock {
 
         let data_len = core::cmp::min(ExtFileBlock::avail_bytes() - offset, data.len());
 
-        for i in idx..idx + (data_len / DataBlock::avail_bytes()) + 1 {
+        for i in idx..idx + (data_len / DataBlock::avail_bytes()) {
             if self.blocks[idx] == BLOCK_ID_NULL {
                 // This should not happen; ever.
                 return Err(ErrorKind::InconsistentState);
