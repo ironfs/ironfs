@@ -942,14 +942,18 @@ impl<T: Storage> IronFs<T> {
         let free_block = self.read_free_block(&free_block_id)?;
         self.next_free_block_id = free_block.next_free_id;
 
-        let mut prev_free_block = self.read_free_block(&free_block.prev_free_id)?;
-        let mut next_free_block = self.read_free_block(&free_block.next_free_id)?;
-        prev_free_block.next_free_id = free_block.next_free_id;
-        next_free_block.prev_free_id = free_block.prev_free_id;
-        prev_free_block.fix_crc();
-        next_free_block.fix_crc();
-        self.write_free_block(&free_block.prev_free_id, &prev_free_block)?;
-        self.write_free_block(&free_block.next_free_id, &next_free_block)?;
+        if free_block.prev_free_id == free_block.next_free_id {
+            self.next_free_block_id = BLOCK_ID_NULL;
+        } else {
+            let mut prev_free_block = self.read_free_block(&free_block.prev_free_id)?;
+            let mut next_free_block = self.read_free_block(&free_block.next_free_id)?;
+            prev_free_block.next_free_id = free_block.next_free_id;
+            next_free_block.prev_free_id = free_block.prev_free_id;
+            prev_free_block.fix_crc();
+            next_free_block.fix_crc();
+            self.write_free_block(&free_block.prev_free_id, &prev_free_block)?;
+            self.write_free_block(&free_block.next_free_id, &next_free_block)?;
+        }
 
         Ok(free_block_id)
     }
