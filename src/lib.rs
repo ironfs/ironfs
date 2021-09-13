@@ -1345,7 +1345,7 @@ mod tests {
         let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
 
         for i in 0..ExtFileBlock::avail_bytes() {
-            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
+            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(28)));
             let mut block = ExtFileBlock::default();
             block.write(&mut ironfs, i, &data[..]).unwrap();
             let mut data2 = vec![0u8; ExtFileBlock::avail_bytes()];
