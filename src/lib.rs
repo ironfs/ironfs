@@ -355,9 +355,7 @@ impl ExtFileBlock {
             }
 
             if self.blocks[i] == BLOCK_ID_NULL {
-                data[pos..pos + DataBlock::avail_bytes()].fill(0x0);
-                pos += DataBlock::avail_bytes();
-                total_bytes += DataBlock::avail_bytes();
+                break;
             } else {
                 let data_block = ironfs.read_data_block(&self.blocks[i])?;
                 let num_bytes =
