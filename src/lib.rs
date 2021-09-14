@@ -97,6 +97,7 @@ impl DirBlock {
             return Ok((*block).clone());
         }
 
+        error!("Failure to create dirblock from bytes.");
         return Err(ErrorKind::InconsistentState);
     }
 
@@ -169,6 +170,7 @@ impl DataBlock {
             return Ok((*block).clone());
         }
 
+        error!("Failure to create data block from bytes.");
         return Err(ErrorKind::InconsistentState);
     }
 
@@ -282,6 +284,7 @@ impl ExtFileBlock {
             return Ok((*block).clone());
         }
 
+        error!("Failure to create file block from bytes.");
         return Err(ErrorKind::InconsistentState);
     }
 
