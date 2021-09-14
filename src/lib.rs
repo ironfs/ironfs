@@ -306,8 +306,13 @@ impl ExtFileBlock {
         let mut total_bytes = 0;
 
         let data_len = core::cmp::min(ExtFileBlock::avail_bytes() - offset, data.len());
+        let max_idx = if (data_len % DataBlock::avail_bytes()) == 0 {
+            idx + (data_len / DataBlock::avail_bytes())
+        } else {
+            idx + (data_len / DataBlock::avail_bytes()) + 1
+        };
 
-        for i in idx..idx + (data_len / DataBlock::avail_bytes()) {
+        for i in idx..max_idx {
             let (data_block_id, mut data_block) = if self.blocks[i] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
                 self.blocks[i] = id;
@@ -345,14 +350,21 @@ impl ExtFileBlock {
         for i in idx..idx + (data_len / DataBlock::avail_bytes()) {
             if self.blocks[idx] == BLOCK_ID_NULL {
                 // This should not happen; ever.
+                error!("Block idx: {} was NULL", idx);
                 return Err(ErrorKind::InconsistentState);
             }
 
-            let data_block = ironfs.read_data_block(&self.blocks[i])?;
-            let num_bytes =
-                data_block.read((pos + offset) % NUM_DATA_BLOCK_BYTES, &mut data[pos..])?;
-            pos += num_bytes;
-            total_bytes += num_bytes;
+            if self.blocks[i] == BLOCK_ID_NULL {
+                data[pos..pos + DataBlock::avail_bytes()].fill(0x0);
+                pos += DataBlock::avail_bytes();
+                total_bytes += DataBlock::avail_bytes();
+            } else {
+                let data_block = ironfs.read_data_block(&self.blocks[i])?;
+                let num_bytes =
+                    data_block.read((pos + offset) % NUM_DATA_BLOCK_BYTES, &mut data[pos..])?;
+                pos += num_bytes;
+                total_bytes += num_bytes;
+            }
         }
 
         Ok(total_bytes)
