@@ -1355,26 +1355,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ext_file_block_write_all_offset() {
-        let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
-
-        for i in 0..ExtFileBlock::avail_bytes() {
-            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(28)));
-            let mut block = ExtFileBlock::default();
-            block.write(&mut ironfs, i, &data[..]).unwrap();
-            let mut data2 = vec![0u8; ExtFileBlock::avail_bytes()];
-            block.read(&ironfs, 0, &mut data2[..]).unwrap();
-            for j in 0..i {
-                assert_eq!(data2[j], 0u8);
-            }
-            for j in i..ExtFileBlock::avail_bytes() {
-                assert_eq!(data2[j], data[j - i]);
-            }
-        }
-    }
-
-    #[test]
     fn test_ext_file_block_read() {
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(29)));
         let mut ext_file_block = ExtFileBlock::default();
@@ -1432,6 +1412,30 @@ mod tests {
 
         for i in 0..data.len() {
             assert_eq!(data[i], data2[i]);
+        }
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+
+        #![proptest_config(ProptestConfig::with_cases(5))]
+        #[test]
+        fn test_ext_file_block_write_offsets(offset in 0usize..NUM_DATA_BLOCK_BYTES) {
+            let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
+            let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+
+            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
+            let mut block = ExtFileBlock::default();
+            block.write(&mut ironfs, offset, &data[..]).unwrap();
+            let mut data2 = vec![0u8; ExtFileBlock::avail_bytes()];
+            block.read(&ironfs, 0, &mut data2[..]).unwrap();
+            for i in 0..offset {
+                prop_assert_eq!(data2[i], 0u8);
+            }
+            for i in offset..ExtFileBlock::avail_bytes() {
+                prop_assert_eq!(data2[i], data[i - offset]);
+            }
         }
     }
 }
