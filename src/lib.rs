@@ -347,7 +347,13 @@ impl ExtFileBlock {
 
         let data_len = core::cmp::min(ExtFileBlock::avail_bytes() - offset, data.len());
 
-        for i in idx..idx + (data_len / DataBlock::avail_bytes()) {
+        let max_idx = if (data_len % DataBlock::avail_bytes()) == 0 {
+            idx + (data_len / DataBlock::avail_bytes())
+        } else {
+            idx + (data_len / DataBlock::avail_bytes()) + 1
+        };
+
+        for i in idx..max_idx {
             if self.blocks[idx] == BLOCK_ID_NULL {
                 // This should not happen; ever.
                 error!("Block idx: {} was NULL", idx);
@@ -1416,8 +1422,8 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
-
         #![proptest_config(ProptestConfig::with_cases(5))]
+
         #[test]
         fn test_ext_file_block_write_offsets(offset in 0usize..NUM_DATA_BLOCK_BYTES) {
             let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
@@ -1433,6 +1439,24 @@ mod tests {
             }
             for i in offset..ExtFileBlock::avail_bytes() {
                 prop_assert_eq!(data2[i], data[i - offset]);
+            }
+        }
+
+        #[test]
+        fn test_ext_file_block_read_offsets(offset in 0usize..NUM_DATA_BLOCK_BYTES) {
+            let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
+            let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+
+            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
+            let mut block = ExtFileBlock::default();
+            block.write(&mut ironfs, 0, &data[..]).unwrap();
+            let mut data2 = vec![0u8; ExtFileBlock::avail_bytes()];
+            block.read(&ironfs, offset, &mut data2[..]).unwrap();
+            for i in 0..(ExtFileBlock::avail_bytes() - offset) {
+                prop_assert_eq!(data2[i], data[i + offset]);
+            }
+            for i in (ExtFileBlock::avail_bytes() - offset)..ExtFileBlock::avail_bytes() {
+                prop_assert_eq!(data2[i], 0u8);
             }
         }
     }
