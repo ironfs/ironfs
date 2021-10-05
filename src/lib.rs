@@ -398,7 +398,9 @@ impl FileBlock {
                 - NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES)
                 / (EXT_FILE_BLOCK_NUM_BLOCKS * NUM_DATA_BLOCK_BYTES);
             let (mut ext_file_block_id, mut ext_file_block) = if self.next_inode == BLOCK_ID_NULL {
+                assert!(ext_file_block_idx == 0);
                 self.next_inode = ironfs.acquire_free_block()?;
+                self.fix_crc();
                 (self.next_inode, ExtFileBlock::default())
             } else {
                 (
