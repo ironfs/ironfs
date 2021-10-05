@@ -85,8 +85,7 @@ struct DirBlock {
     reserved1: u64,
     owner: u16,
     group: u16,
-    perms: u16,
-    reserved2: u16,
+    perms: u32,
     entries: [BlockId; DIR_BLOCK_NUM_ENTRIES],
 }
 
@@ -123,7 +122,6 @@ impl DirBlock {
             group: 0,
             perms: 0,
             reserved1: 0,
-            reserved2: 0,
             entries: [BLOCK_ID_NULL; DIR_BLOCK_NUM_ENTRIES],
         }
     }
@@ -216,8 +214,7 @@ struct FileBlock {
     ctime: Timestamp,
     owner: u16,
     group: u16,
-    perms: u16,
-    reserved: u16,
+    perms: u32,
     size: u64,
     data: [u8; NUM_BYTES_INITIAL_CONTENTS],
     blocks: [BlockId; NUM_DATA_BLOCKS_IN_FILE],
@@ -238,7 +235,6 @@ impl Default for FileBlock {
             owner: 0,
             group: 0,
             perms: 0,
-            reserved: 0,
             size: 0,
             data: [0u8; 1024],
             blocks: [BLOCK_ID_NULL; NUM_DATA_BLOCKS_IN_FILE],
@@ -727,7 +723,7 @@ pub struct Attrs {
     pub ctime: Timestamp,
     pub owner: u16,
     pub group: u16,
-    pub perms: u16,
+    pub perms: u32,
 }
 
 const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
@@ -900,6 +896,7 @@ impl<T: Storage> IronFs<T> {
             let mut new_file_block = FileBlock::from_timestamp(now);
             new_file_block.name_len = name.len() as u32;
             new_file_block.name[..name.len()].copy_from_slice(name.as_bytes());
+            new_file_block.perms = perms;
             let new_file_block_id = FileId(id.0);
             new_file_block.fix_crc();
             self.write_file_block(&new_file_block_id, &new_file_block)?;

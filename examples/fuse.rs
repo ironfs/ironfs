@@ -43,7 +43,7 @@ impl From<FileAttr> for fuser::FileAttr {
             ctime: UNIX_EPOCH + Duration::new(attr.ctime.secs as u64, attr.ctime.nsecs as u32),
             crtime: SystemTime::UNIX_EPOCH,
             kind: kind,
-            perm: attr.perms,
+            perm: attr.perms as u16,
             nlink: 2,
             uid: attr.owner as u32,
             gid: attr.group as u32,
