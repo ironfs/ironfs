@@ -302,12 +302,12 @@ impl FileBlock {
                 - NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES)
                 / (EXT_FILE_BLOCK_NUM_BLOCKS * NUM_DATA_BLOCK_BYTES);
             let mut ext_file_block_inode = self.next_inode;
-            trace!("rd read block id: {}", ext_file_block_inode.0);
+            trace!("rd read block id: 0x{:x}", ext_file_block_inode.0);
             let mut ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode)?;
             for _ in 0..ext_file_block_idx {
                 // Iterate through the ext file block to find the one at our expected index.
                 ext_file_block_inode = ext_file_block.next_inode;
-                trace!("rd read block id: {}", ext_file_block_inode.0);
+                trace!("rd read block id: 0x{:x}", ext_file_block_inode.0);
                 ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode)?;
             }
             trace!(
@@ -458,7 +458,7 @@ impl FileBlock {
                 ext_file_block.fix_crc();
                 ironfs.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
                 ext_file_block_id = ext_file_block.next_inode;
-                trace!("wr write next inode: {}", ext_file_block_id.0);
+                trace!("wr write next inode: 0x{:x}", ext_file_block_id.0);
 
                 if needs_more_data {
                     if !has_more_data {
@@ -1326,6 +1326,8 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
 
 #[cfg(test)]
 mod tests {
+
+    use unicode_segmentation::UnicodeSegmentation;
     use super::*;
 
     #[test]
@@ -1434,8 +1436,9 @@ mod tests {
     fn test_ext_file_block_read() {
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(29)));
         let mut ext_file_block = ExtFileBlock::default();
-        let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+
+        let txt = rust_counter_strings::generate(ExtFileBlock::avail_bytes());
+        let data = txt.as_bytes();
         assert_eq!(data.len(), ExtFileBlock::avail_bytes());
         ext_file_block.write(&mut ironfs, 0, &data[..]).unwrap();
 
@@ -1449,19 +1452,19 @@ mod tests {
     #[test]
     fn test_data_block_write() {
         let mut data_block = DataBlock::default();
-        let data: Vec<usize> = (0..NUM_DATA_BLOCK_BYTES).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+        let txt = rust_counter_strings::generate(NUM_DATA_BLOCK_BYTES);
+        let data = txt.as_bytes();
         data_block.write(0, &data[..]).unwrap();
         // Now confirm all of the written data blocks have proper contents.
         for i in 0..data.len() {
-            assert_eq!(data_block.data[i], i as u8);
+            assert_eq!(data_block.data[i], data[i]);
         }
     }
 
     #[test]
     fn test_data_block_write_all_offset() {
-        let data: Vec<usize> = (0..DataBlock::avail_bytes()).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+        let txt = rust_counter_strings::generate(DataBlock::avail_bytes());
+        let data = txt.as_bytes();
         for i in 0..data.len() {
             let mut data_block = DataBlock::default();
             data_block.write(i, &data[..]).unwrap();
@@ -1479,8 +1482,8 @@ mod tests {
     #[test]
     fn test_data_block_read() {
         let mut data_block = DataBlock::default();
-        let data: Vec<usize> = (0..NUM_DATA_BLOCK_BYTES).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+        let txt = rust_counter_strings::generate(NUM_DATA_BLOCK_BYTES);
+        let data = txt.as_bytes();
         data_block.write(0, &data[..]).unwrap();
 
         let mut data2 = [0u8; NUM_DATA_BLOCK_BYTES];
@@ -1493,9 +1496,9 @@ mod tests {
 
     #[test]
     fn test_big_file_write() {
-        const NUM_BYTES: usize = 3_000_0000;
-        let data: Vec<usize> = (0..NUM_BYTES).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+        const NUM_BYTES: usize = 3_000_000;
+        let txt = rust_counter_strings::generate(NUM_BYTES);
+        let data = txt.as_bytes();
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let mut file_block = FileBlock::default();
@@ -1513,9 +1516,9 @@ mod tests {
     fn test_big_file_small_chunks_write() {
         env_logger::init();
 
-        const NUM_BYTES: usize = 3_000_0000;
-        let data: Vec<usize> = (0..NUM_BYTES).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+        const NUM_BYTES: usize = 3_000_000;
+        let txt = rust_counter_strings::generate(NUM_BYTES);
+        let data = txt.as_bytes();
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let mut file_block = FileBlock::default();
@@ -1533,6 +1536,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_write_ext_file_block_small_chunks() {
+        env_logger::init();
+
+        const NUM_BYTES: usize = 1_000_000;
+        let txt = rust_counter_strings::generate(NUM_BYTES);
+        let data = txt.as_bytes();
+
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
+        let mut file_block = FileBlock::default();
+        let starting_pos = NUM_BYTES_INITIAL_CONTENTS + NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES;
+        let mut pos = starting_pos;
+        for chunk in data.chunks(8112) {
+            file_block.write(&mut ironfs, pos, &chunk[..]).unwrap();
+            pos += 8112;
+        }
+
+        let mut data2 = vec![0u8; NUM_BYTES];
+        file_block.read(&ironfs, starting_pos, &mut data2).unwrap();
+
+        for i in 0..data.len() {
+            assert_eq!(data[i], data2[i]);
+        }
+    }
+
     const FILE_BLOCK_INTERNAL_NBYTES: usize =
         NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * NUM_DATA_BLOCK_BYTES);
 
@@ -1543,8 +1571,8 @@ mod tests {
 
         #[test]
         fn test_ext_file_block_write_offsets(offset in 0usize..NUM_DATA_BLOCK_BYTES) {
-            let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
-            let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+            let txt = rust_counter_strings::generate(ExtFileBlock::avail_bytes());
+            let data = txt.as_bytes();
 
             let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
             let mut block = ExtFileBlock::default();
@@ -1561,8 +1589,8 @@ mod tests {
 
         #[test]
         fn test_ext_file_block_read_offsets(offset in 0usize..NUM_DATA_BLOCK_BYTES) {
-            let data: Vec<usize> = (0..ExtFileBlock::avail_bytes()).collect();
-            let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+            let txt = rust_counter_strings::generate(ExtFileBlock::avail_bytes());
+            let data = txt.as_bytes();
 
             let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
             let mut block = ExtFileBlock::default();
@@ -1579,9 +1607,8 @@ mod tests {
 
         #[test]
         fn test_file_block_inline_data(offset in 0usize..NUM_BYTES_INITIAL_CONTENTS) {
-
-            let data: Vec<usize> = (0..NUM_BYTES_INITIAL_CONTENTS).collect();
-            let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+            let txt = rust_counter_strings::generate(NUM_BYTES_INITIAL_CONTENTS);
+            let data = txt.as_bytes();
 
             let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
             let mut block = FileBlock::default();
@@ -1598,8 +1625,8 @@ mod tests {
 
         #[test]
         fn test_file_block_data(offset in 0usize..FILE_BLOCK_INTERNAL_NBYTES) {
-            let data: Vec<usize> = (0..FILE_BLOCK_INTERNAL_NBYTES).collect();
-            let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
+            let txt = rust_counter_strings::generate(FILE_BLOCK_INTERNAL_NBYTES);
+            let data = txt.as_bytes();
 
             let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
             let mut block = FileBlock::default();
