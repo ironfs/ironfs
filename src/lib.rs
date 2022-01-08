@@ -1556,8 +1556,16 @@ mod tests {
         let mut data2 = vec![0u8; NUM_BYTES];
         file_block.read(&ironfs, starting_pos, &mut data2).unwrap();
 
-        for i in 0..data.len() {
-            assert_eq!(data[i], data2[i]);
+        let mut prev = None;
+        for i in (0..data.len()).step_by(32) {
+            if let Some(prev) = prev {
+                let orig = String::from_utf8_lossy(&data[prev..i]);
+                let new = String::from_utf8_lossy(&data2[prev..i]);
+                assert_eq!(orig, new);
+                //assert_eq!(&data[prev..i], &data2[prev..i])
+            }
+
+            prev = Some(i);
         }
     }
 
