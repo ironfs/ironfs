@@ -1,11 +1,20 @@
 #![cfg_attr(not(test), no_std)]
 
+mod data_block;
+mod error;
+mod util;
+
+use data_block::DataBlock;
+pub use error::ErrorKind;
+pub use util::Timestamp;
+use util::{Crc, CRC_INIT, CRC};
+use util::BlockMagic;
+
 use log::{debug, error, info, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
 
-const DATA_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DATA");
 const FILE_INODE_MAGIC: BlockMagic = BlockMagic(*b"INOD");
 const FILE_INODE_EXT_MAGICK: BlockMagic = BlockMagic(*b"EINO");
 const SUPER_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"SUPR");
@@ -14,7 +23,7 @@ const DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DIRB");
 const EXT_DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"EDIR");
 const FREE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"FREE");
 
-const BLOCK_SIZE: usize = 4096;
+pub(crate) const BLOCK_SIZE: usize = 4096;
 
 const LBA_SIZE: usize = 512;
 
@@ -31,21 +40,11 @@ enum BlockMagicType {
     FreeBlock,
 }
 
-#[derive(Debug, AsBytes, FromBytes, PartialEq, Eq, Clone)]
-#[repr(C)]
-struct BlockMagic([u8; 4]);
-
 #[derive(Debug, AsBytes, FromBytes, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct BlockId(pub u32);
 
 const BLOCK_ID_NULL: BlockId = BlockId(0xFFFFFFFF);
-
-#[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(C)]
-struct Crc(u32);
-
-const CRC_INIT: Crc = Crc(0x00000000);
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(C)]
@@ -137,69 +136,234 @@ struct DirInodeExt {
     data: [BlockId; 1020],
 }
 
-const DATA_BLOCK_NUM_BYTES: usize = 4088;
-
-#[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(C)]
-struct DataBlock {
-    magic: BlockMagic,
-    crc: Crc,
-    data: [u8; DATA_BLOCK_NUM_BYTES],
-}
-
-impl Default for DataBlock {
-    fn default() -> Self {
-        DataBlock {
-            magic: DATA_BLOCK_MAGIC,
-            crc: CRC_INIT,
-            data: [0u8; 4088],
-        }
-    }
-}
-
-impl DataBlock {
-    const fn avail_bytes() -> usize {
-        DATA_BLOCK_NUM_BYTES
-    }
-
-    fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
-        let block: Option<LayoutVerified<_, DataBlock>> = LayoutVerified::new(bytes);
-        if let Some(block) = block {
-            return Ok((*block).clone());
-        }
-
-        error!("Failure to create data block from bytes.");
-        return Err(ErrorKind::InconsistentState);
-    }
-
-    fn fix_crc(&mut self) {
-        self.crc = CRC_INIT;
-        self.crc = Crc(CRC.checksum(self.as_bytes()));
-    }
-
-    fn read(&self, offset: usize, data: &mut [u8]) -> Result<usize, ErrorKind> {
-        let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - offset, data.len());
-        data[..num_bytes].copy_from_slice(&self.data[offset..offset + num_bytes]);
-        Ok(num_bytes)
-    }
-
-    fn write(&mut self, offset: usize, data: &[u8]) -> Result<usize, ErrorKind> {
-        let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - offset, data.len());
-        self.data[offset..offset + num_bytes].copy_from_slice(&data[..num_bytes]);
-        Ok(num_bytes)
-    }
-}
-
-#[derive(Copy, Debug, AsBytes, FromBytes, Clone)]
-#[repr(C)]
-pub struct Timestamp {
-    pub secs: i64,
-    pub nsecs: u64,
-}
-
 const NUM_BYTES_INITIAL_CONTENTS: usize = 1024;
 
 const NUM_DATA_BLOCKS_IN_FILE: usize = 684;
+
+struct File {
+    top_inode: FileId,
+    cur_inode: BlockId,
+    cur_block_id: BlockId,
+    size: usize,
+}
+
+impl File {
+    fn create_from_timestamp<T: Storage>(ironfs: &mut IronFs<T>, now: Timestamp) -> Result<Self, ErrorKind> {
+        let mut inode = FileInode::default();
+        unimplemented!();
+    }
+
+    /// Open a file.
+    /// TODO make this accept Path as parameter.
+    fn open<T: Storage>(ironfs: &mut IronFs<T>, path: &str) -> Result<Self, ErrorKind> {
+        let mut inode = FileInode::default();
+        unimplemented!();
+    }
+
+    fn read<T: Storage>(
+        &mut self,
+        ironfs: &IronFs<T>,
+        offset: usize,
+        data: &mut [u8],
+    ) -> Result<usize, ErrorKind> {
+        info!("rd file offset: {} data len: {}", offset, data.len());
+        let mut pos = 0;
+
+        let inode = ironfs.read_file_block(&self.top_inode)?;
+        let end = core::cmp::min(inode.size as usize, data.len());
+        if offset < FileInode::capacity() {
+            pos += inode.read(ironfs, offset, &mut data[..FileInode::capacity()])?;
+        }
+
+        // Repeatedly load ext file inode blocks and then read out their data.
+        if pos < end
+            && (pos + offset - NUM_BYTES_INITIAL_CONTENTS)
+                >= (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())
+        {
+            // First figure out the first ext inode our data blocks live in.
+            // Note that if we just read data from the first inode then this process should result
+            // in us reading data into the first ext file inode.
+            let mut ext_file_block_idx = (pos + offset - FileInode::capacity())
+                / (EXT_FILE_BLOCK_NUM_BLOCKS * DataBlock::capacity());
+            let mut ext_file_block_inode_id = inode.next_inode;
+            trace!("rd read block id: 0x{:x}", ext_file_block_inode_id.0);
+            let mut ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode_id)?;
+            for _ in 0..ext_file_block_idx {
+                // Iterate through the ext file inode to find the one at our expected index.
+                ext_file_block_inode_id = ext_file_block.next_inode;
+                trace!("rd read block id: 0x{:x}", ext_file_block_inode_id.0);
+                ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode_id)?;
+            }
+            trace!(
+                "rd idx: {} block: {}",
+                ext_file_block_idx,
+                ext_file_block_inode_id.0
+            );
+
+            // We're now reading data from the extended file inode area.
+            while pos < end && ext_file_block_inode_id != BLOCK_ID_NULL {
+                let mut pos_in_ext_file = pos + offset - FileInode::capacity()
+                    - ext_file_block_idx * FileInodeExt::capacity();
+                trace!(
+                    "rd pos in ext file: {} pos: {} end: {}",
+                    pos_in_ext_file,
+                    pos,
+                    end
+                );
+
+                let num_bytes = ext_file_block.read(ironfs, pos_in_ext_file, &mut data[pos..])?;
+                trace!("rd num_bytes: {}", num_bytes);
+
+                pos += num_bytes;
+                pos_in_ext_file += num_bytes;
+                trace!("rd pos_in_ext_file: {}", pos_in_ext_file);
+                if pos_in_ext_file >= (EXT_FILE_BLOCK_NUM_BLOCKS * DataBlock::capacity()) {
+                    ext_file_block_inode_id = ext_file_block.next_inode;
+                    trace!("rd read block id: {}", ext_file_block_inode_id.0);
+                    if ext_file_block_inode_id != BLOCK_ID_NULL {
+                        ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode_id)?;
+                        ext_file_block_idx += 1;
+                    } else {
+                        // We expected to have further data but did not.
+                        return Err(ErrorKind::InconsistentState);
+                    }
+                    trace!(
+                        "rd nxt inode: {} ext_file_block_idx: {}",
+                        ext_file_block_inode_id.0,
+                        ext_file_block_idx
+                    );
+                }
+            }
+        }
+
+        Ok(pos)
+    }
+
+    fn write<T: Storage>(
+        &mut self,
+        ironfs: &mut IronFs<T>,
+        offset: usize,
+        data: &[u8],
+    ) -> Result<usize, ErrorKind> {
+        info!("wr file offset: {} data len: {}", offset, data.len());
+
+        let mut pos = 0;
+        let end = data.len();
+
+        let mut file_inode = ironfs.read_file_block(&self.top_inode)?;
+
+        if offset < NUM_BYTES_INITIAL_CONTENTS {
+            let nbytes = core::cmp::min(end, file_inode.data.len() - offset);
+            file_inode.data[offset..offset + nbytes].copy_from_slice(&data[..nbytes]);
+            pos += nbytes;
+        }
+
+        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()) {
+            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
+            let (data_block_id, mut data_block) = if file_inode.blocks[idx] == BLOCK_ID_NULL {
+                let id = ironfs.acquire_free_block()?;
+                file_inode.blocks[idx] = id;
+                (id, DataBlock::default())
+            } else {
+                let id = file_inode.blocks[idx];
+                (id, ironfs.read_data_block(&id)?)
+            };
+            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
+            let num_bytes = core::cmp::min(DataBlock::capacity() - pos_in_block, end - pos);
+            data_block.write(pos_in_block, &data[pos..pos+num_bytes])?;
+            ironfs.write_data_block(&data_block_id, &data_block)?;
+
+            pos += num_bytes;
+        }
+
+        if (pos + offset - NUM_BYTES_INITIAL_CONTENTS)
+            >= (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())
+        {
+            let mut ext_file_block_idx = (pos + offset
+                - NUM_BYTES_INITIAL_CONTENTS
+                - NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())
+                / (EXT_FILE_BLOCK_NUM_BLOCKS * DataBlock::capacity());
+            let (mut ext_file_block_id, mut ext_file_block) = if file_inode.next_inode == BLOCK_ID_NULL {
+                assert!(ext_file_block_idx == 0);
+                file_inode.next_inode = ironfs.acquire_free_block()?;
+                file_inode.fix_crc();
+                (file_inode.next_inode, FileInodeExt::default())
+            } else {
+                (
+                    file_inode.next_inode,
+                    ironfs.read_ext_file_block(&file_inode.next_inode)?,
+                )
+            };
+            trace!("wr second inode: {}", file_inode.next_inode.0);
+            trace!("wr block_idx: {}", ext_file_block_idx);
+
+            for _ in 0..ext_file_block_idx {
+                if ext_file_block.next_inode == BLOCK_ID_NULL {
+                    let new_inode_id = ironfs.acquire_free_block()?;
+                    ext_file_block.next_inode = new_inode_id;
+                    trace!("wr new ext file inode: {}", ext_file_block.next_inode.0);
+                    ext_file_block.fix_crc();
+                    ironfs.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
+                    ext_file_block_id = new_inode_id;
+                    ext_file_block = FileInodeExt::default();
+                } else {
+                    ext_file_block_id = ext_file_block.next_inode;
+                    ext_file_block = ironfs.read_ext_file_block(&ext_file_block_id)?;
+                }
+            }
+
+            while pos < end {
+                let pos_in_ext_file = pos + offset
+                    - NUM_BYTES_INITIAL_CONTENTS
+                    - NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()
+                    - ext_file_block_idx * EXT_FILE_BLOCK_NUM_BLOCKS * DataBlock::capacity();
+
+                let num_bytes = ext_file_block.write(ironfs, pos_in_ext_file, &data[pos..end])?;
+                pos += num_bytes;
+                assert_ne!(num_bytes, 0);
+
+                let new_ext_file_block_idx = (pos + offset
+                    - NUM_BYTES_INITIAL_CONTENTS
+                    - NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())
+                    / (EXT_FILE_BLOCK_NUM_BLOCKS * DataBlock::capacity());
+
+                let needs_more_data = ext_file_block_idx != new_ext_file_block_idx || pos < end;
+                let has_more_data = ext_file_block.next_inode != BLOCK_ID_NULL;
+                trace!(
+                    "wr needs more data: {} has more data: {}",
+                    needs_more_data,
+                    has_more_data
+                );
+
+                if needs_more_data && !has_more_data {
+                    ext_file_block.next_inode = ironfs.acquire_free_block()?;
+                }
+
+                ext_file_block.fix_crc();
+                ironfs.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
+                ext_file_block_id = ext_file_block.next_inode;
+                trace!("wr write next inode: 0x{:x}", ext_file_block_id.0);
+
+                if needs_more_data {
+                    if !has_more_data {
+                        ext_file_block = FileInodeExt::default();
+                    } else {
+                        ext_file_block = ironfs.read_ext_file_block(&ext_file_block_id)?;
+                    }
+                }
+
+                ext_file_block_idx = new_ext_file_block_idx;
+                trace!("wr block_idx: {}", ext_file_block_idx);
+            }
+        }
+
+        if file_inode.size < (pos + offset) as u64 {
+            file_inode.size = (pos + offset) as u64;
+        }
+
+        Ok(pos)
+    }
+}
 
 #[derive(AsBytes, FromBytes, Clone)]
 #[repr(C)]
@@ -243,6 +407,10 @@ impl Default for FileInode {
 }
 
 impl FileInode {
+    const fn capacity() -> usize {
+        return NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity());
+    }
+
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
         let block: Option<LayoutVerified<_, FileInode>> = LayoutVerified::new(bytes);
         if let Some(block) = block {
@@ -258,12 +426,12 @@ impl FileInode {
     }
 
     fn read<T: Storage>(
-        &mut self,
+        &self,
         ironfs: &IronFs<T>,
         offset: usize,
         data: &mut [u8],
     ) -> Result<usize, ErrorKind> {
-        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)) {
+        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())) {
             return Err(ErrorKind::OutOfBounds);
         }
 
@@ -277,11 +445,11 @@ impl FileInode {
             pos += nbytes
         }
 
-        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES) {
-            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DATA_BLOCK_NUM_BYTES;
+        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()) {
+            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
             let data_block_id = self.blocks[idx];
-            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DATA_BLOCK_NUM_BYTES;
-            let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - pos_in_block, end - pos);
+            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
+            let num_bytes = core::cmp::min(DataBlock::capacity() - pos_in_block, end - pos);
 
             if data_block_id == BLOCK_ID_NULL {
                 data[pos..pos + num_bytes].fill(0u8);
@@ -289,8 +457,8 @@ impl FileInode {
                 let data_block = ironfs.read_data_block(&data_block_id)?;
                 // TODO verify CRC.
 
-                data[pos..pos + num_bytes]
-                    .copy_from_slice(&data_block.data[pos_in_block..pos_in_block + num_bytes]);
+
+                data_block.read(pos_in_block, &mut data[pos..pos + num_bytes]);
             }
 
             pos += num_bytes;
@@ -306,7 +474,7 @@ impl FileInode {
         data: &[u8],
     ) -> Result<usize, ErrorKind> {
         info!("wr ext file inode offset: {} data len: {}", offset, data.len());
-        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)) {
+        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())) {
             return Err(ErrorKind::OutOfBounds);
         }
 
@@ -318,8 +486,8 @@ impl FileInode {
             pos += nbytes;
         }
 
-        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DataBlock::avail_bytes()) {
-            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DATA_BLOCK_NUM_BYTES;
+        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()) {
+            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
             let (data_block_id, mut data_block) = if self.blocks[idx] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
                 self.blocks[idx] = id;
@@ -328,10 +496,9 @@ impl FileInode {
                 let id = self.blocks[idx];
                 (id, ironfs.read_data_block(&id)?)
             };
-            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DATA_BLOCK_NUM_BYTES;
-            let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - pos_in_block, end - pos);
-            data_block.data[pos_in_block..pos_in_block + num_bytes]
-                .copy_from_slice(&data[pos..pos + num_bytes]);
+            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
+            let num_bytes = core::cmp::min(DataBlock::capacity() - pos_in_block, end - pos);
+            data_block.write(pos_in_block, &data[pos..pos + num_bytes])?;
             data_block.fix_crc();
             ironfs.write_data_block(&data_block_id, &data_block)?;
 
@@ -366,8 +533,8 @@ struct FileInodeExt {
 }
 
 impl FileInodeExt {
-    const fn avail_bytes() -> usize {
-        EXT_FILE_BLOCK_NUM_BLOCKS * DataBlock::avail_bytes()
+    const fn capacity() -> usize {
+        EXT_FILE_BLOCK_NUM_BLOCKS * DataBlock::capacity()
     }
 
     fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
@@ -391,17 +558,17 @@ impl FileInodeExt {
         offset: usize,
         data: &[u8],
     ) -> Result<usize, ErrorKind> {
-        assert!(offset < FileInodeExt::avail_bytes());
+        assert!(offset < FileInodeExt::capacity());
 
         let mut pos = 0;
-        let idx = offset / DATA_BLOCK_NUM_BYTES;
+        let idx = offset / DataBlock::capacity();
         let mut total_bytes = 0;
 
-        let data_len = core::cmp::min(FileInodeExt::avail_bytes() - offset, data.len());
-        let max_idx = if (data_len % DataBlock::avail_bytes()) == 0 {
-            idx + (data_len / DataBlock::avail_bytes())
+        let data_len = core::cmp::min(FileInodeExt::capacity() - offset, data.len());
+        let max_idx = if (data_len % DataBlock::capacity()) == 0 {
+            idx + (data_len / DataBlock::capacity())
         } else {
-            idx + (data_len / DataBlock::avail_bytes()) + 1
+            idx + (data_len / DataBlock::capacity()) + 1
         };
 
         for i in idx..max_idx {
@@ -415,7 +582,7 @@ impl FileInodeExt {
             };
 
             let num_bytes =
-                data_block.write((pos + offset) % DATA_BLOCK_NUM_BYTES, &data[pos..])?;
+                data_block.write((pos + offset) % DataBlock::capacity(), &data[pos..])?;
             pos += num_bytes;
             total_bytes += num_bytes;
             data_block.fix_crc();
@@ -431,18 +598,18 @@ impl FileInodeExt {
         offset: usize,
         data: &mut [u8],
     ) -> Result<usize, ErrorKind> {
-        assert!(offset < FileInodeExt::avail_bytes());
+        assert!(offset < FileInodeExt::capacity());
 
         let mut pos = 0;
-        let idx = offset / DATA_BLOCK_NUM_BYTES;
+        let idx = offset / DataBlock::capacity();
         let mut total_bytes = 0;
 
-        let data_len = core::cmp::min(FileInodeExt::avail_bytes() - offset, data.len());
+        let data_len = core::cmp::min(FileInodeExt::capacity() - offset, data.len());
 
-        let max_idx = if (data_len % DataBlock::avail_bytes()) == 0 {
-            idx + (data_len / DataBlock::avail_bytes())
+        let max_idx = if (data_len % DataBlock::capacity()) == 0 {
+            idx + (data_len / DataBlock::capacity())
         } else {
-            idx + (data_len / DataBlock::avail_bytes()) + 1
+            idx + (data_len / DataBlock::capacity()) + 1
         };
 
         for i in idx..max_idx {
@@ -457,7 +624,7 @@ impl FileInodeExt {
             } else {
                 let data_block = ironfs.read_data_block(&self.blocks[i])?;
                 let num_bytes =
-                    data_block.read((pos + offset) % DATA_BLOCK_NUM_BYTES, &mut data[pos..])?;
+                    data_block.read((pos + offset) % DataBlock::capacity(), &mut data[pos..])?;
                 pos += num_bytes;
                 total_bytes += num_bytes;
             }
@@ -564,16 +731,6 @@ impl DirectoryListing {
 }
 
 #[derive(Debug)]
-pub enum ErrorKind {
-    NotImplemented,
-    NoEntry,
-    InconsistentState,
-    OutOfSpace,
-    NotFormatted,
-    OutOfBounds,
-}
-
-#[derive(Debug)]
 pub enum AttrKind {
     File,
     Directory,
@@ -591,8 +748,6 @@ pub struct Attrs {
     pub group: u16,
     pub perms: u32,
 }
-
-const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
 
 impl<T: Storage> IronFs<T> {
     pub fn from(storage: T) -> Self {
@@ -1189,261 +1344,6 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
     }
 }
 
-struct File {
-    top_inode: BlockId,
-    cur_inode: BlockId,
-    cur_block_id: BlockId,
-    size: usize,
-}
-
-impl File {
-    fn create_from_timestamp<T: Storage>(ironfs: &mut IronFs<T>, now: Timestamp) -> Result<Self, ErrorKind> {
-        let mut inode = FileInode::default();
-        unimplemented!();
-    }
-
-    /// Open a file.
-    /// TODO make this accept Path as parameter.
-    fn open<T: Storage>(ironfs: &mut IronFs<T>, path: &str) -> Result<Self, ErrorKind> {
-        let mut inode = FileInode::default();
-        unimplemented!();
-    }
-
-    fn read<T: Storage>(
-        &mut self,
-        ironfs: &IronFs<T>,
-        offset: usize,
-        data: &mut [u8],
-    ) -> Result<usize, ErrorKind> {
-        info!("rd file offset: {} data len: {}", offset, data.len());
-
-        let mut pos = 0;
-        let end = core::cmp::min(self.size as usize, data.len());
-
-        let file_inode = ironfs.read_file_block(&FileId(self.top_inode.0))?;
-
-        // Read out data for very short files.
-        if offset < NUM_BYTES_INITIAL_CONTENTS {
-            let nbytes = core::cmp::min(end - offset, file_inode.data.len());
-            data[..nbytes].copy_from_slice(&file_inode.data[offset..offset + nbytes]);
-            pos += nbytes
-        }
-
-        // Read data blocks out of the top-level file inode.
-        while pos < end && ((pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)) {
-            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DATA_BLOCK_NUM_BYTES;
-            let data_block_id = file_inode.blocks[idx];
-            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DATA_BLOCK_NUM_BYTES;
-            let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - pos_in_block, end - pos);
-
-            if data_block_id == BLOCK_ID_NULL {
-                data[pos..pos + num_bytes].fill(0u8);
-            } else {
-                let data_block = ironfs.read_data_block(&data_block_id)?;
-                // TODO verify CRC.
-
-                data[pos..pos + num_bytes]
-                    .copy_from_slice(&data_block.data[pos_in_block..pos_in_block + num_bytes]);
-            }
-
-            pos += num_bytes;
-        }
-
-        // Repeatedly load ext file inode blocks and then read out their data.
-        if pos < end
-            && (pos + offset - NUM_BYTES_INITIAL_CONTENTS)
-                >= (NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)
-        {
-            // First figure out what ext inode our data blocks live in.
-
-            // We're now reading data in the extended file inode area.
-            let mut ext_file_block_idx = (pos + offset
-                - NUM_BYTES_INITIAL_CONTENTS
-                - NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)
-                / (EXT_FILE_BLOCK_NUM_BLOCKS * DATA_BLOCK_NUM_BYTES);
-            let mut ext_file_block_inode = file_inode.next_inode;
-            trace!("rd read block id: 0x{:x}", ext_file_block_inode.0);
-            let mut ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode)?;
-            for _ in 0..ext_file_block_idx {
-                // Iterate through the ext file inode to find the one at our expected index.
-                ext_file_block_inode = ext_file_block.next_inode;
-                trace!("rd read block id: 0x{:x}", ext_file_block_inode.0);
-                ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode)?;
-            }
-            trace!(
-                "rd idx: {} block: {}",
-                ext_file_block_idx,
-                ext_file_block_inode.0
-            );
-
-            while pos < end && ext_file_block_inode != BLOCK_ID_NULL {
-                let mut pos_in_ext_file = pos + offset
-                    - NUM_BYTES_INITIAL_CONTENTS
-                    - NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES
-                    - ext_file_block_idx * EXT_FILE_BLOCK_NUM_BLOCKS * DATA_BLOCK_NUM_BYTES;
-                trace!(
-                    "rd pos in ext file: {} pos: {} end: {}",
-                    pos_in_ext_file,
-                    pos,
-                    end
-                );
-
-                let num_bytes = ext_file_block.read(ironfs, pos_in_ext_file, &mut data[pos..])?;
-                trace!("rd num_bytes: {}", num_bytes);
-
-                pos += num_bytes;
-                pos_in_ext_file += num_bytes;
-                trace!("rd pos_in_ext_file: {}", pos_in_ext_file);
-                if pos_in_ext_file >= (EXT_FILE_BLOCK_NUM_BLOCKS * DATA_BLOCK_NUM_BYTES) {
-                    ext_file_block_inode = ext_file_block.next_inode;
-                    trace!("rd read block id: {}", ext_file_block_inode.0);
-                    if ext_file_block_inode != BLOCK_ID_NULL {
-                        ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode)?;
-                        ext_file_block_idx += 1;
-                    } else {
-                        // We expected to have further data but did not.
-                        return Err(ErrorKind::InconsistentState);
-                    }
-                    trace!(
-                        "rd nxt inode: {} ext_file_block_idx: {}",
-                        ext_file_block_inode.0,
-                        ext_file_block_idx
-                    );
-                }
-            }
-        }
-
-        Ok(pos)
-    }
-
-    fn write<T: Storage>(
-        &mut self,
-        ironfs: &mut IronFs<T>,
-        offset: usize,
-        data: &[u8],
-    ) -> Result<usize, ErrorKind> {
-        info!("wr file offset: {} data len: {}", offset, data.len());
-
-        let mut pos = 0;
-        let end = data.len();
-
-        let mut file_inode = ironfs.read_file_block(&FileId(self.top_inode.0))?;
-
-        if offset < NUM_BYTES_INITIAL_CONTENTS {
-            let nbytes = core::cmp::min(end, file_inode.data.len() - offset);
-            file_inode.data[offset..offset + nbytes].copy_from_slice(&data[..nbytes]);
-            pos += nbytes;
-        }
-
-        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DataBlock::avail_bytes()) {
-            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DATA_BLOCK_NUM_BYTES;
-            let (data_block_id, mut data_block) = if file_inode.blocks[idx] == BLOCK_ID_NULL {
-                let id = ironfs.acquire_free_block()?;
-                file_inode.blocks[idx] = id;
-                (id, DataBlock::default())
-            } else {
-                let id = file_inode.blocks[idx];
-                (id, ironfs.read_data_block(&id)?)
-            };
-            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DATA_BLOCK_NUM_BYTES;
-            let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - pos_in_block, end - pos);
-            data_block.data[pos_in_block..pos_in_block + num_bytes]
-                .copy_from_slice(&data[pos..pos + num_bytes]);
-            data_block.fix_crc();
-            ironfs.write_data_block(&data_block_id, &data_block)?;
-
-            pos += num_bytes;
-        }
-
-        if (pos + offset - NUM_BYTES_INITIAL_CONTENTS)
-            >= (NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)
-        {
-            let mut ext_file_block_idx = (pos + offset
-                - NUM_BYTES_INITIAL_CONTENTS
-                - NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)
-                / (EXT_FILE_BLOCK_NUM_BLOCKS * DATA_BLOCK_NUM_BYTES);
-            let (mut ext_file_block_id, mut ext_file_block) = if file_inode.next_inode == BLOCK_ID_NULL {
-                assert!(ext_file_block_idx == 0);
-                file_inode.next_inode = ironfs.acquire_free_block()?;
-                file_inode.fix_crc();
-                (file_inode.next_inode, FileInodeExt::default())
-            } else {
-                (
-                    file_inode.next_inode,
-                    ironfs.read_ext_file_block(&file_inode.next_inode)?,
-                )
-            };
-            trace!("wr second inode: {}", file_inode.next_inode.0);
-            trace!("wr block_idx: {}", ext_file_block_idx);
-
-            for _ in 0..ext_file_block_idx {
-                if ext_file_block.next_inode == BLOCK_ID_NULL {
-                    let new_inode_id = ironfs.acquire_free_block()?;
-                    ext_file_block.next_inode = new_inode_id;
-                    trace!("wr new ext file inode: {}", ext_file_block.next_inode.0);
-                    ext_file_block.fix_crc();
-                    ironfs.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
-                    ext_file_block_id = new_inode_id;
-                    ext_file_block = FileInodeExt::default();
-                } else {
-                    ext_file_block_id = ext_file_block.next_inode;
-                    ext_file_block = ironfs.read_ext_file_block(&ext_file_block_id)?;
-                }
-            }
-
-            while pos < end {
-                let pos_in_ext_file = pos + offset
-                    - NUM_BYTES_INITIAL_CONTENTS
-                    - NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES
-                    - ext_file_block_idx * EXT_FILE_BLOCK_NUM_BLOCKS * DATA_BLOCK_NUM_BYTES;
-
-                let num_bytes = ext_file_block.write(ironfs, pos_in_ext_file, &data[pos..end])?;
-                pos += num_bytes;
-                assert_ne!(num_bytes, 0);
-
-                let new_ext_file_block_idx = (pos + offset
-                    - NUM_BYTES_INITIAL_CONTENTS
-                    - NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES)
-                    / (EXT_FILE_BLOCK_NUM_BLOCKS * DATA_BLOCK_NUM_BYTES);
-
-                let needs_more_data = ext_file_block_idx != new_ext_file_block_idx || pos < end;
-                let has_more_data = ext_file_block.next_inode != BLOCK_ID_NULL;
-                trace!(
-                    "wr needs more data: {} has more data: {}",
-                    needs_more_data,
-                    has_more_data
-                );
-
-                if needs_more_data && !has_more_data {
-                    ext_file_block.next_inode = ironfs.acquire_free_block()?;
-                }
-
-                ext_file_block.fix_crc();
-                ironfs.write_ext_file_block(&ext_file_block_id, &ext_file_block)?;
-                ext_file_block_id = ext_file_block.next_inode;
-                trace!("wr write next inode: 0x{:x}", ext_file_block_id.0);
-
-                if needs_more_data {
-                    if !has_more_data {
-                        ext_file_block = FileInodeExt::default();
-                    } else {
-                        ext_file_block = ironfs.read_ext_file_block(&ext_file_block_id)?;
-                    }
-                }
-
-                ext_file_block_idx = new_ext_file_block_idx;
-                trace!("wr block_idx: {}", ext_file_block_idx);
-            }
-        }
-
-        if file_inode.size < (pos + offset) as u64 {
-            file_inode.size = (pos + offset) as u64;
-        }
-
-        Ok(pos)
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -1473,11 +1373,6 @@ mod tests {
     #[test]
     fn valid_super_block_size() {
         assert_eq!(core::mem::size_of::<SuperBlock>(), BLOCK_SIZE);
-    }
-
-    #[test]
-    fn valid_data_block_size() {
-        assert_eq!(core::mem::size_of::<DataBlock>(), BLOCK_SIZE);
     }
 
     struct RamStorage(Vec<u8>);
@@ -1545,9 +1440,9 @@ mod tests {
     fn test_ext_file_block_write() {
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(29)));
         let mut ext_file_block = FileInodeExt::default();
-        let data: Vec<usize> = (0..FileInodeExt::avail_bytes()).collect();
+        let data: Vec<usize> = (0..FileInodeExt::capacity()).collect();
         let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
-        assert_eq!(data.len(), FileInodeExt::avail_bytes());
+        assert_eq!(data.len(), FileInodeExt::capacity());
         ext_file_block.write(&mut ironfs, 0, &data[..]).unwrap();
         // Now confirm all of the written data blocks have proper contents.
     }
@@ -1557,59 +1452,14 @@ mod tests {
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(29)));
         let mut ext_file_block = FileInodeExt::default();
 
-        let txt = rust_counter_strings::generate(FileInodeExt::avail_bytes());
+        let txt = rust_counter_strings::generate(FileInodeExt::capacity());
         let data = txt.as_bytes();
-        assert_eq!(data.len(), FileInodeExt::avail_bytes());
+        assert_eq!(data.len(), FileInodeExt::capacity());
         ext_file_block.write(&mut ironfs, 0, &data[..]).unwrap();
 
-        let mut data2 = vec![0u8; FileInodeExt::avail_bytes()];
+        let mut data2 = vec![0u8; FileInodeExt::capacity()];
         ext_file_block.read(&mut ironfs, 0, &mut data2[..]).unwrap();
-        for i in 0..FileInodeExt::avail_bytes() {
-            assert_eq!(data[i], data2[i]);
-        }
-    }
-
-    #[test]
-    fn test_data_block_write() {
-        let mut data_block = DataBlock::default();
-        let txt = rust_counter_strings::generate(DATA_BLOCK_NUM_BYTES);
-        let data = txt.as_bytes();
-        data_block.write(0, &data[..]).unwrap();
-        // Now confirm all of the written data blocks have proper contents.
-        for i in 0..data.len() {
-            assert_eq!(data_block.data[i], data[i]);
-        }
-    }
-
-    #[test]
-    fn test_data_block_write_all_offset() {
-        let txt = rust_counter_strings::generate(DataBlock::avail_bytes());
-        let data = txt.as_bytes();
-        for i in 0..data.len() {
-            let mut data_block = DataBlock::default();
-            data_block.write(i, &data[..]).unwrap();
-            let mut data2 = vec![0u8; DataBlock::avail_bytes()];
-            data_block.read(0, &mut data2[..]).unwrap();
-            for j in 0..i {
-                assert_eq!(data2[j], 0u8);
-            }
-            for j in i..DataBlock::avail_bytes() {
-                assert_eq!(data2[j], data[j - i]);
-            }
-        }
-    }
-
-    #[test]
-    fn test_data_block_read() {
-        let mut data_block = DataBlock::default();
-        let txt = rust_counter_strings::generate(DATA_BLOCK_NUM_BYTES);
-        let data = txt.as_bytes();
-        data_block.write(0, &data[..]).unwrap();
-
-        let mut data2 = [0u8; DATA_BLOCK_NUM_BYTES];
-        data_block.read(0, &mut data2).unwrap();
-
-        for i in 0..data.len() {
+        for i in 0..FileInodeExt::capacity() {
             assert_eq!(data[i], data2[i]);
         }
     }
@@ -1669,7 +1519,7 @@ mod tests {
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let mut file_block = FileInode::default();
-        let starting_pos = NUM_BYTES_INITIAL_CONTENTS + NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES;
+        let starting_pos = NUM_BYTES_INITIAL_CONTENTS + NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity();
         trace!("Starting pos is: {}", starting_pos);
         let mut pos = starting_pos;
         for chunk in data.chunks(CHUNK_SIZE) {
@@ -1711,7 +1561,7 @@ mod tests {
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let mut file_block = FileInode::default();
-        let starting_pos = NUM_BYTES_INITIAL_CONTENTS + NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES;
+        let starting_pos = NUM_BYTES_INITIAL_CONTENTS + NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity();
         let mut pos = starting_pos;
         for chunk in data.chunks(8112) {
             file_block.write(&mut ironfs, pos, &chunk[..]).unwrap();
@@ -1735,7 +1585,7 @@ mod tests {
     }
 
     const FILE_BLOCK_INTERNAL_NBYTES: usize =
-        NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DATA_BLOCK_NUM_BYTES);
+        NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity());
 
     use proptest::prelude::*;
 
@@ -1743,37 +1593,37 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(5))]
 
         #[test]
-        fn test_ext_file_block_write_offsets(offset in 0usize..DATA_BLOCK_NUM_BYTES) {
-            let txt = rust_counter_strings::generate(FileInodeExt::avail_bytes());
+        fn test_ext_file_block_write_offsets(offset in 0usize..DataBlock::capacity()) {
+            let txt = rust_counter_strings::generate(FileInodeExt::capacity());
             let data = txt.as_bytes();
 
             let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
             let mut block = FileInodeExt::default();
             block.write(&mut ironfs, offset, &data[..]).unwrap();
-            let mut data2 = vec![0u8; FileInodeExt::avail_bytes()];
+            let mut data2 = vec![0u8; FileInodeExt::capacity()];
             block.read(&ironfs, 0, &mut data2[..]).unwrap();
             for i in 0..offset {
                 prop_assert_eq!(data2[i], 0u8);
             }
-            for i in offset..FileInodeExt::avail_bytes() {
+            for i in offset..FileInodeExt::capacity() {
                 prop_assert_eq!(data2[i], data[i - offset]);
             }
         }
 
         #[test]
-        fn test_ext_file_block_read_offsets(offset in 0usize..DATA_BLOCK_NUM_BYTES) {
-            let txt = rust_counter_strings::generate(FileInodeExt::avail_bytes());
+        fn test_ext_file_block_read_offsets(offset in 0usize..DataBlock::capacity()) {
+            let txt = rust_counter_strings::generate(FileInodeExt::capacity());
             let data = txt.as_bytes();
 
             let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
             let mut block = FileInodeExt::default();
             block.write(&mut ironfs, 0, &data[..]).unwrap();
-            let mut data2 = vec![0u8; FileInodeExt::avail_bytes()];
+            let mut data2 = vec![0u8; FileInodeExt::capacity()];
             block.read(&ironfs, offset, &mut data2[..]).unwrap();
-            for i in 0..(FileInodeExt::avail_bytes() - offset) {
+            for i in 0..(FileInodeExt::capacity() - offset) {
                 prop_assert_eq!(data2[i], data[i + offset]);
             }
-            for i in (FileInodeExt::avail_bytes() - offset)..FileInodeExt::avail_bytes() {
+            for i in (FileInodeExt::capacity() - offset)..FileInodeExt::capacity() {
                 prop_assert_eq!(data2[i], 0u8);
             }
         }
