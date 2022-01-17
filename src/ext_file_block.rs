@@ -1,9 +1,8 @@
-
-use crate::storage::Storage;
-use crate::IronFs;
-use crate::error::ErrorKind;
 use crate::data_block::DataBlock;
-use crate::util::{BlockMagic, BlockId, BLOCK_ID_NULL, Timestamp, Crc, CRC, CRC_INIT, NAME_NLEN};
+use crate::error::ErrorKind;
+use crate::storage::Storage;
+use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
+use crate::IronFs;
 use log::{error, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
@@ -52,8 +51,7 @@ impl ExtFileBlock {
         data: &[u8],
     ) -> Result<usize, ErrorKind> {
         assert!(offset < ExtFileBlock::capacity());
-        trace!("ext file block write: {} data: {:?}",
-            offset, data);
+        trace!("ext file block write: {} data: {:?}", offset, data);
 
         let mut pos = 0;
         let idx = offset / DataBlock::capacity();
@@ -70,7 +68,11 @@ impl ExtFileBlock {
             let (data_block_id, mut data_block) = if self.blocks[i] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
                 self.blocks[i] = id;
-                trace!("Acquiring free data block id: {:?} and assigning it to: {}", id, i);
+                trace!(
+                    "Acquiring free data block id: {:?} and assigning it to: {}",
+                    id,
+                    i
+                );
                 (id, DataBlock::default())
             } else {
                 let id = self.blocks[i];
@@ -82,8 +84,14 @@ impl ExtFileBlock {
             pos += num_bytes;
             total_bytes += num_bytes;
             data_block.fix_crc();
-            trace!("writing data block i: {} (idx: {} of max_idx: {}) id: {:?} with contents: {:?}",
-                i, idx, max_idx, data_block_id, data_block);
+            trace!(
+                "writing data block i: {} (idx: {} of max_idx: {}) id: {:?} with contents: {:?}",
+                i,
+                idx,
+                max_idx,
+                data_block_id,
+                data_block
+            );
             ironfs.write_data_block(&data_block_id, &data_block)?;
         }
 
@@ -97,8 +105,11 @@ impl ExtFileBlock {
         data: &mut [u8],
     ) -> Result<usize, ErrorKind> {
         assert!(offset < ExtFileBlock::capacity());
-        info!("ext file block read offset: {} data len: {}",
-            offset, data.len());
+        info!(
+            "ext file block read offset: {} data len: {}",
+            offset,
+            data.len()
+        );
 
         let mut pos = 0;
         let idx = offset / DataBlock::capacity();
@@ -117,10 +128,14 @@ impl ExtFileBlock {
             if self.blocks[i] == BLOCK_ID_NULL {
                 trace!("Found NULL block at i: {}", i);
                 // No block allocated means that there is a hole in the data likely because someone
-                // was writing and seeked forward into the file. 
+                // was writing and seeked forward into the file.
                 // Let's go ahead and populate the data_block with the missing data.
                 let num_bytes = DataBlock::capacity() - (offset % DataBlock::capacity());
-                trace!("Zeroing data from pos begin: {} to end: {}", pos, pos + num_bytes);
+                trace!(
+                    "Zeroing data from pos begin: {} to end: {}",
+                    pos,
+                    pos + num_bytes
+                );
                 data[pos..(pos + num_bytes)].fill(0u8);
                 pos += num_bytes;
                 total_bytes += num_bytes;
@@ -246,7 +261,6 @@ mod tests {
             assert_eq!(data[i], data2[i]);
         }
     }
-
 
     #[test]
     fn test_ext_file_block_write() {

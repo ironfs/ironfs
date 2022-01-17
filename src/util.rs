@@ -1,4 +1,3 @@
-
 use zerocopy::{AsBytes, FromBytes};
 
 #[derive(Debug, AsBytes, FromBytes, PartialEq, Eq, Clone)]

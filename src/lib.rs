@@ -1,22 +1,22 @@
 #![cfg_attr(not(test), no_std)]
 
 mod data_block;
-mod file_block;
-mod ext_file_block;
 mod error;
+mod ext_file_block;
+mod file_block;
 mod storage;
 mod util;
 
-use ext_file_block::ExtFileBlock;
-use file_block::FileBlock;
 use data_block::DataBlock;
 pub use error::ErrorKind;
+use ext_file_block::ExtFileBlock;
+use file_block::FileBlock;
+pub use storage::{Geometry, LbaId, Storage};
+use util::BlockMagic;
 pub use util::Timestamp;
 use util::BLOCK_ID_NULL;
-pub use storage::{Geometry, LbaId, Storage};
-use util::{Crc, CRC_INIT, CRC};
 pub use util::{BlockId, NAME_NLEN};
-use util::BlockMagic;
+use util::{Crc, CRC, CRC_INIT};
 
 use log::{debug, error, info, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
@@ -101,7 +101,6 @@ impl TryFrom<&[u8]> for DirInode {
 }
 
 impl DirInode {
-
     fn fix_crc(&mut self) {
         self.crc = CRC_INIT;
         self.crc = Crc(CRC.checksum(self.as_bytes()));
@@ -153,7 +152,10 @@ struct File {
 }
 
 impl File {
-    fn create_from_timestamp<T: Storage>(ironfs: &mut IronFs<T>, now: Timestamp) -> Result<Self, ErrorKind> {
+    fn create_from_timestamp<T: Storage>(
+        ironfs: &mut IronFs<T>,
+        now: Timestamp,
+    ) -> Result<Self, ErrorKind> {
         let mut inode = FileBlock::default();
         unimplemented!();
     }
@@ -183,7 +185,7 @@ impl File {
         Ok(())
     }
 
-        /*
+    /*
     fn read<T: Storage>(
         &mut self,
         ironfs: &IronFs<T>,
@@ -262,7 +264,7 @@ impl File {
     }
         */
 
-            /*
+    /*
     fn write<T: Storage>(
         &mut self,
         ironfs: &mut IronFs<T>,
@@ -748,8 +750,8 @@ impl<T: Storage> IronFs<T> {
                 })
             }
             Some(BlockMagicType::DirInode) => {
-                let dir = DirInode::try_from(&bytes[..])
-                    .expect("failure to convert bytes to dir block");
+                let dir =
+                    DirInode::try_from(&bytes[..]).expect("failure to convert bytes to dir block");
                 Ok(Attrs {
                     block_id: *entry,
                     kind: AttrKind::Directory,
@@ -1054,7 +1056,9 @@ impl<T: Storage> IronFs<T> {
 
             // Erase all the block_id contents.
             // This neesd to move on to next_inode etc file contents.
-            let mut file = File { top_inode: FileId(block_id.0) };
+            let mut file = File {
+                top_inode: FileId(block_id.0),
+            };
             file.unlink(self)?;
         } else {
             return Err(ErrorKind::NoEntry);
@@ -1082,8 +1086,8 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
 #[cfg(test)]
 mod tests {
 
-    use unicode_segmentation::UnicodeSegmentation;
     use super::*;
+    use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
     fn valid_file_block_size() {

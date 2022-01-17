@@ -1,4 +1,3 @@
-
 use crate::error::ErrorKind;
 use crate::util::{BlockMagic, Crc, CRC, CRC_INIT};
 use log::error;

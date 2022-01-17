@@ -1,9 +1,8 @@
-
-use crate::storage::Storage;
-use crate::IronFs;
-use crate::error::ErrorKind;
 use crate::data_block::DataBlock;
-use crate::util::{BlockMagic, BlockId, BLOCK_ID_NULL, Timestamp, Crc, CRC, CRC_INIT, NAME_NLEN};
+use crate::error::ErrorKind;
+use crate::storage::Storage;
+use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
+use crate::IronFs;
 use log::info;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
@@ -55,7 +54,6 @@ impl Default for FileBlock {
 }
 
 impl FileBlock {
-
     pub(crate) const fn capacity() -> usize {
         return NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity());
     }
@@ -80,8 +78,8 @@ impl FileBlock {
         offset: usize,
         data: &mut [u8],
     ) -> Result<usize, ErrorKind> {
-
-        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())) {
+        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()))
+        {
             return Err(ErrorKind::OutOfBounds);
         }
 
@@ -122,7 +120,8 @@ impl FileBlock {
         data: &[u8],
     ) -> Result<usize, ErrorKind> {
         info!("wr file inode offset: {} data len: {}", offset, data.len());
-        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())) {
+        if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()))
+        {
             return Err(ErrorKind::OutOfBounds);
         }
 
