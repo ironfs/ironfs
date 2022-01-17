@@ -80,6 +80,7 @@ impl FileBlock {
         offset: usize,
         data: &mut [u8],
     ) -> Result<usize, ErrorKind> {
+
         if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())) {
             return Err(ErrorKind::OutOfBounds);
         }
@@ -105,8 +106,6 @@ impl FileBlock {
             } else {
                 let data_block = ironfs.read_data_block(&data_block_id)?;
                 // TODO verify CRC.
-
-
                 data_block.read(pos_in_block, &mut data[pos..pos + num_bytes]);
             }
 
@@ -122,7 +121,7 @@ impl FileBlock {
         offset: usize,
         data: &[u8],
     ) -> Result<usize, ErrorKind> {
-        info!("wr ext file inode offset: {} data len: {}", offset, data.len());
+        info!("wr file inode offset: {} data len: {}", offset, data.len());
         if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())) {
             return Err(ErrorKind::OutOfBounds);
         }
@@ -153,6 +152,8 @@ impl FileBlock {
 
             pos += num_bytes;
         }
+
+        self.size = core::cmp::max(self.size as u64, (pos + offset) as u64);
 
         Ok(pos)
     }
@@ -216,6 +217,10 @@ mod tests {
     use super::*;
     use crate::storage::{Geometry, LbaId, Storage};
     use crate::IronFs;
+
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
 
     struct RamStorage(Vec<u8>);
 
@@ -286,7 +291,8 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(5))]
         #[test]
         fn test_file_block_inline_data(offset in 0usize..NUM_BYTES_INITIAL_CONTENTS) {
-            let txt = rust_counter_strings::generate(NUM_BYTES_INITIAL_CONTENTS);
+            init();
+            let txt = rust_counter_strings::generate(NUM_BYTES_INITIAL_CONTENTS - offset);
             let data = txt.as_bytes();
 
             let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
@@ -294,27 +300,24 @@ mod tests {
             block.write(&mut ironfs, offset, &data[..]).unwrap();
             let mut data2 = vec![0u8; NUM_BYTES_INITIAL_CONTENTS];
             block.read(&ironfs, 0, &mut data2[..]).unwrap();
-            for i in 0..offset {
-                prop_assert_eq!(data2[i], 0u8);
-            }
-            for i in offset..NUM_BYTES_INITIAL_CONTENTS {
-                prop_assert_eq!(data2[i], data[i - offset]);
-            }
+            let empty = vec![0u8; offset];
+            prop_assert_eq!(&data2[..offset], &empty[..]);
+            prop_assert_eq!(&data2[offset..], &data[..]);
         }
 
         #[test]
         fn test_file_block_data(offset in 0usize..FILE_BLOCK_INTERNAL_NBYTES) {
+            init();
             let txt = rust_counter_strings::generate(FILE_BLOCK_INTERNAL_NBYTES);
             let data = txt.as_bytes();
 
-            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
+            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
             let mut block = FileBlock::default();
             block.write(&mut ironfs, offset, &data[..]).unwrap();
             let mut data2 = vec![0u8; FILE_BLOCK_INTERNAL_NBYTES];
             block.read(&ironfs, 0, &mut data2[..]).unwrap();
-            for i in 0..offset {
-                prop_assert_eq!(data2[i], 0u8);
-            }
+            let empty = vec![0u8; offset];
+            prop_assert_eq!(&data2[..offset], &empty[..]);
             for i in offset..FILE_BLOCK_INTERNAL_NBYTES {
                 prop_assert_eq!(data2[i], data[i - offset]);
             }
