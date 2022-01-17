@@ -283,9 +283,6 @@ mod tests {
         ironfs
     }
 
-    const FILE_BLOCK_INTERNAL_NBYTES: usize =
-        NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity());
-
     use proptest::prelude::*;
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(5))]
@@ -306,19 +303,19 @@ mod tests {
         }
 
         #[test]
-        fn test_file_block_data(offset in 0usize..FILE_BLOCK_INTERNAL_NBYTES) {
+        fn test_file_block_data(offset in 0usize..FileBlock::capacity()) {
             init();
-            let txt = rust_counter_strings::generate(FILE_BLOCK_INTERNAL_NBYTES);
+            let txt = rust_counter_strings::generate(FileBlock::capacity());
             let data = txt.as_bytes();
 
-            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
+            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
             let mut block = FileBlock::default();
             block.write(&mut ironfs, offset, &data[..]).unwrap();
-            let mut data2 = vec![0u8; FILE_BLOCK_INTERNAL_NBYTES];
+            let mut data2 = vec![0u8; FileBlock::capacity()];
             block.read(&ironfs, 0, &mut data2[..]).unwrap();
             let empty = vec![0u8; offset];
             prop_assert_eq!(&data2[..offset], &empty[..]);
-            for i in offset..FILE_BLOCK_INTERNAL_NBYTES {
+            for i in offset..FileBlock::capacity() {
                 prop_assert_eq!(data2[i], data[i - offset]);
             }
         }

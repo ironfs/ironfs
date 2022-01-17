@@ -1171,34 +1171,7 @@ mod tests {
         ironfs
     }
 
-    #[test]
-    fn test_ext_file_block_write() {
-        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(29)));
-        let mut ext_file_block = ExtFileBlock::default();
-        let data: Vec<usize> = (0..ExtFileBlock::capacity()).collect();
-        let data: Vec<u8> = data.iter().map(|x| *x as u8).collect();
-        assert_eq!(data.len(), ExtFileBlock::capacity());
-        ext_file_block.write(&mut ironfs, 0, &data[..]).unwrap();
-        // Now confirm all of the written data blocks have proper contents.
-    }
-
-    #[test]
-    fn test_ext_file_block_read() {
-        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(29)));
-        let mut ext_file_block = ExtFileBlock::default();
-
-        let txt = rust_counter_strings::generate(ExtFileBlock::capacity());
-        let data = txt.as_bytes();
-        assert_eq!(data.len(), ExtFileBlock::capacity());
-        ext_file_block.write(&mut ironfs, 0, &data[..]).unwrap();
-
-        let mut data2 = vec![0u8; ExtFileBlock::capacity()];
-        ext_file_block.read(&mut ironfs, 0, &mut data2[..]).unwrap();
-        for i in 0..ExtFileBlock::capacity() {
-            assert_eq!(data[i], data2[i]);
-        }
-    }
-
+    /*
     #[test]
     fn test_big_file_write() {
         const NUM_BYTES: usize = 3_000_000;
@@ -1318,47 +1291,12 @@ mod tests {
             prev = Some(i);
         }
     }
+    */
 
     use proptest::prelude::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(5))]
-
-        #[test]
-        fn test_ext_file_block_write_offsets(offset in 0usize..DataBlock::capacity()) {
-            let txt = rust_counter_strings::generate(ExtFileBlock::capacity());
-            let data = txt.as_bytes();
-
-            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
-            let mut block = ExtFileBlock::default();
-            block.write(&mut ironfs, offset, &data[..]).unwrap();
-            let mut data2 = vec![0u8; ExtFileBlock::capacity()];
-            block.read(&ironfs, 0, &mut data2[..]).unwrap();
-            for i in 0..offset {
-                prop_assert_eq!(data2[i], 0u8);
-            }
-            for i in offset..ExtFileBlock::capacity() {
-                prop_assert_eq!(data2[i], data[i - offset]);
-            }
-        }
-
-        #[test]
-        fn test_ext_file_block_read_offsets(offset in 0usize..DataBlock::capacity()) {
-            let txt = rust_counter_strings::generate(ExtFileBlock::capacity());
-            let data = txt.as_bytes();
-
-            let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(22)));
-            let mut block = ExtFileBlock::default();
-            block.write(&mut ironfs, 0, &data[..]).unwrap();
-            let mut data2 = vec![0u8; ExtFileBlock::capacity()];
-            block.read(&ironfs, offset, &mut data2[..]).unwrap();
-            for i in 0..(ExtFileBlock::capacity() - offset) {
-                prop_assert_eq!(data2[i], data[i + offset]);
-            }
-            for i in (ExtFileBlock::capacity() - offset)..ExtFileBlock::capacity() {
-                prop_assert_eq!(data2[i], 0u8);
-            }
-        }
 
     }
 }
