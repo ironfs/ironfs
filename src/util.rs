@@ -13,6 +13,15 @@ pub(crate) const CRC_INIT: Crc = Crc(0x00000000);
 
 pub(crate) const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
 
+#[derive(Debug, AsBytes, FromBytes, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct BlockId(pub u32);
+
+pub(crate) const BLOCK_ID_NULL: BlockId = BlockId(0xFFFFFFFF);
+
+/// Maximum number of characters for directory or file name.
+pub const NAME_NLEN: usize = 256;
+
 #[derive(Copy, Debug, AsBytes, FromBytes, Clone)]
 #[repr(C)]
 pub struct Timestamp {

@@ -1,8 +1,7 @@
 
-use log::{debug, error, info, trace, warn};
-
 use crate::error::ErrorKind;
 use crate::util::{BlockMagic, Crc, CRC, CRC_INIT};
+use log::error;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const DATA_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DATA");
@@ -27,12 +26,10 @@ impl Default for DataBlock {
     }
 }
 
-impl DataBlock {
-    pub(crate) const fn capacity() -> usize {
-        DATA_BLOCK_NUM_BYTES
-    }
+impl TryFrom<&[u8]> for DataBlock {
+    type Error = ErrorKind;
 
-    pub(crate) fn try_from_bytes(bytes: &[u8]) -> Result<Self, ErrorKind> {
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let block: Option<LayoutVerified<_, DataBlock>> = LayoutVerified::new(bytes);
         if let Some(block) = block {
             return Ok((*block).clone());
@@ -40,6 +37,12 @@ impl DataBlock {
 
         error!("Failure to create data block from bytes.");
         return Err(ErrorKind::InconsistentState);
+    }
+}
+
+impl DataBlock {
+    pub(crate) const fn capacity() -> usize {
+        DATA_BLOCK_NUM_BYTES
     }
 
     pub(crate) fn fix_crc(&mut self) {
