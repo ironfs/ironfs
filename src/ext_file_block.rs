@@ -178,72 +178,8 @@ mod tests {
 
     use super::*;
     use crate::storage::{Geometry, LbaId, Storage};
+    use crate::tests_util::*;
     use crate::IronFs;
-
-    fn init() {
-        let _ = env_logger::builder().is_test(true).try_init();
-    }
-
-    struct RamStorage(Vec<u8>);
-
-    impl RamStorage {
-        fn new(nbytes: usize) -> Self {
-            RamStorage(vec![0u8; nbytes])
-        }
-    }
-
-    const LBA_SIZE: usize = 512;
-
-    impl Storage for RamStorage {
-        fn read(&self, lba: LbaId, data: &mut [u8]) {
-            let start_addr = lba.0 * LBA_SIZE;
-            data.clone_from_slice(&self.0[start_addr..start_addr + data.len()]);
-        }
-        fn write(&mut self, lba: LbaId, data: &[u8]) {
-            let start_addr = lba.0 * LBA_SIZE;
-            self.0[start_addr..start_addr + data.len()].copy_from_slice(data);
-        }
-        fn erase(&mut self, lba: LbaId, num_lba: usize) {
-            let start_addr = lba.0 * LBA_SIZE;
-            let end_addr = (lba.0 + num_lba) * LBA_SIZE;
-            for i in &mut self.0[start_addr..end_addr] {
-                *i = 0xFF;
-            }
-        }
-
-        fn geometry(&self) -> Geometry {
-            Geometry {
-                lba_size: 512,
-                num_blocks: self.0.len() / 512,
-            }
-        }
-    }
-
-    fn current_timestamp() -> Timestamp {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let start = SystemTime::now();
-        let since_the_epoch = start
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards");
-        Timestamp {
-            secs: since_the_epoch.as_secs() as i64,
-            nsecs: since_the_epoch.subsec_nanos() as u64,
-        }
-    }
-
-    fn make_filesystem<T: Storage>(storage: T) -> IronFs<T> {
-        let mut ironfs = IronFs::from(storage);
-        match ironfs.bind() {
-            Err(ErrorKind::NotFormatted) => {
-                ironfs
-                    .format(current_timestamp())
-                    .expect("Failure to format ironfs.");
-                ironfs.bind().expect("Failure to bind after format.");
-            }
-            _ => {}
-        };
-        ironfs
-    }
 
     #[test]
     fn test_ext_file_block_read() {

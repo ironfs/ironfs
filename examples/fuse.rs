@@ -566,7 +566,7 @@ fn main() {
     ];
 
     let num_bytes = opt.num_bytes.unwrap_or(33554432);
-    let mut ironfs = IronFs::from(RamStorage::new(num_bytes));
+    let mut ironfs = IronFs::new(RamStorage::new(num_bytes), current_timestamp);
     debug!("First bind");
     match ironfs.bind() {
         Err(ironfs::ErrorKind::NotFormatted) => {
