@@ -1196,7 +1196,6 @@ mod tests {
         assert_eq!(data, data2);
     }
 
-    /*
     #[test]
     fn test_big_file_small_chunks_write() {
         env_logger::init();
@@ -1206,19 +1205,17 @@ mod tests {
         let data = txt.as_bytes();
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
-        let mut file_block = FileBlock::default();
+        let mut file = File::create(&mut ironfs, "big_file", 0, 0, 0).unwrap();
         let mut pos = 0;
         for chunk in data.chunks(16384) {
-            file_block.write(&mut ironfs, pos, &chunk[..]).unwrap();
+            file.write(&mut ironfs, pos, &chunk[..]).unwrap();
             pos += 16384;
         }
 
         let mut data2 = vec![0u8; NUM_BYTES];
-        file_block.read(&ironfs, 0, &mut data2).unwrap();
+        file.read(&ironfs, 0, &mut data2).unwrap();
 
-        for i in 0..data.len() {
-            assert_eq!(data[i], data2[i]);
-        }
+        assert_eq!(data, data2);
     }
 
     /// Test the condition where we cross a portion of an internal boundary and have a failure to
@@ -1233,26 +1230,24 @@ mod tests {
         let data = txt.as_bytes();
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
-        let mut file_block = FileBlock::default();
+        let mut file = File::create(&mut ironfs, "big_file", 0, 0, 0).unwrap();
         let starting_pos = FileBlock::capacity();
         trace!("Starting pos is: {}", starting_pos);
         let mut pos = starting_pos;
         for chunk in data.chunks(CHUNK_SIZE) {
-            file_block.write(&mut ironfs, pos, &chunk[..]).unwrap();
+            file.write(&mut ironfs, pos, &chunk[..]).unwrap();
             pos += CHUNK_SIZE;
         }
 
         // Confirm that we have all zeroed data leading up to starting position.
         info!("Confirm that leading data is zeroed.");
         let mut zero_buf = vec![0u8; starting_pos];
-        file_block.read(&ironfs, 0, &mut zero_buf[..]);
-        for i in 0..zero_buf.len() {
-            assert_eq!(0, zero_buf[i]);
-        }
+        file.read(&ironfs, 0, &mut zero_buf[..]);
+        assert_eq!(zero_buf, vec![0u8; starting_pos]);
 
         info!("Confirm that we have valid counter string data");
         let mut data2 = vec![0u8; NUM_BYTES];
-        file_block.read(&ironfs, starting_pos, &mut data2).unwrap();
+        file.read(&ironfs, starting_pos, &mut data2).unwrap();
 
         let mut prev = None;
         for i in (0..data.len()).step_by(32) {
@@ -1266,6 +1261,7 @@ mod tests {
         }
     }
 
+    /*
     #[test]
     fn test_write_ext_file_block_small_chunks() {
         env_logger::init();
