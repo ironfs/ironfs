@@ -1,3 +1,5 @@
+
+#[derive(Debug)]
 pub struct LbaId(pub usize);
 
 pub struct Geometry {

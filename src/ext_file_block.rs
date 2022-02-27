@@ -69,7 +69,7 @@ impl ExtFileBlock {
                 let id = ironfs.acquire_free_block()?;
                 self.blocks[i] = id;
                 trace!(
-                    "Acquiring free data block id: {:?} and assigning it to: {}",
+                    "Acquiring free data block id: {:?} and assigning it to idx: {}",
                     id,
                     i
                 );
@@ -81,18 +81,22 @@ impl ExtFileBlock {
 
             let num_bytes =
                 data_block.write((pos + offset) % DataBlock::capacity(), &data[pos..])?;
-            pos += num_bytes;
-            total_bytes += num_bytes;
-            data_block.fix_crc();
             trace!(
-                "writing data block i: {} (idx: {} of max_idx: {}) id: {:?} with contents: {:?}",
+                "writing data block pos: {} offset: {} pos+offset: {} i: {} (idx: {} of max_idx: {}) id: {:?} with contents: {:?}",
+                pos,
+                offset,
+                pos + offset,
                 i,
                 idx,
                 max_idx,
                 data_block_id,
                 data_block
             );
+            pos += num_bytes;
+            total_bytes += num_bytes;
+            data_block.fix_crc();
             ironfs.write_data_block(&data_block_id, &data_block)?;
+            trace!("wrote data block id: {:x?} now pos: {}", data_block_id, pos);
         }
 
         Ok(total_bytes)
@@ -130,9 +134,14 @@ impl ExtFileBlock {
                 // No block allocated means that there is a hole in the data likely because someone
                 // was writing and seeked forward into the file.
                 // Let's go ahead and populate the data_block with the missing data.
-                let num_bytes = DataBlock::capacity() - (offset % DataBlock::capacity());
+                trace!("foo pos: {} capacity: {} mod: {}", pos, DataBlock::capacity(), pos % DataBlock::capacity());
+                let num_bytes = core::cmp::min(data.len() - (pos + offset), DataBlock::capacity() - ((pos + offset) % DataBlock::capacity()));
                 trace!(
-                    "Zeroing data from pos begin: {} to end: {}",
+                    "Zeroing data with len: {} offset is: {} capacity: {} num_bytes: {} from pos begin: {} to end: {}",
+                    data.len(),
+                    offset,
+                    DataBlock::capacity(),
+                    num_bytes,
                     pos,
                     pos + num_bytes
                 );
