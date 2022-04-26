@@ -3,7 +3,7 @@ use crate::util::{BlockMagic, Crc, CRC, CRC_INIT};
 use log::error;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
-const DATA_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DATA");
+pub(crate) const DATA_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DATA");
 
 const DATA_BLOCK_NUM_BYTES: usize = 4088;
 

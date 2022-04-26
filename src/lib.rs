@@ -18,7 +18,7 @@ use util::BLOCK_ID_NULL;
 pub use util::{BlockId, NAME_NLEN};
 use util::{Crc, CRC, CRC_INIT};
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
@@ -153,10 +153,10 @@ struct File {
 
 impl File {
     fn create_from_timestamp<T: Storage>(
-        ironfs: &mut IronFs<T>,
-        now: Timestamp,
+        _ironfs: &mut IronFs<T>,
+        _now: Timestamp,
     ) -> Result<Self, ErrorKind> {
-        let mut inode = FileBlock::default();
+        let _inode = FileBlock::default();
         unimplemented!();
     }
 
@@ -164,8 +164,8 @@ impl File {
         ironfs: &mut IronFs<T>,
         name: &str,
         perms: u32,
-        owner: u16,
-        group: u16,
+        _owner: u16,
+        _group: u16,
     ) -> Result<Self, ErrorKind> {
         let file_block_id = ironfs.acquire_free_block()?;
         let file_block_id = FileId(file_block_id.0);
@@ -178,8 +178,8 @@ impl File {
 
     /// Open a file.
     /// TODO make this accept Path as parameter.
-    pub fn open<T: Storage>(ironfs: &mut IronFs<T>, path: &str) -> Result<Self, ErrorKind> {
-        let mut inode = FileBlock::default();
+    pub fn open<T: Storage>(_ironfs: &mut IronFs<T>, _path: &str) -> Result<Self, ErrorKind> {
+        let _inode = FileBlock::default();
         unimplemented!();
     }
 
@@ -462,7 +462,8 @@ impl Iterator for DirectoryListing {
                 } else {
                     #[cfg(debug_assertions)]
                     panic!("Filesystem is in inconsistent state.");
-                    break;
+                    // TODO re-enable break after panic is removed.
+                    // break;
                 }
             } else {
                 break;
@@ -473,7 +474,7 @@ impl Iterator for DirectoryListing {
 }
 
 impl DirectoryListing {
-    pub fn get(&self, name: &str) -> Option<u32> {
+    pub fn get(&self, _name: &str) -> Option<u32> {
         None
     }
 }
@@ -565,7 +566,7 @@ impl<T: Storage> IronFs<T> {
         dir_block.name[0] = '/' as u8;
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
         trace!("writing root dir block.");
-        self.write_dir_block(&DirectoryId(1), &dir_block);
+        self.write_dir_block(&DirectoryId(1), &dir_block)?;
 
         for i in 2..num_blocks {
             let prev_free_id = if i == 2 {
@@ -1054,9 +1055,9 @@ impl<T: Storage> IronFs<T> {
         file_id: &FileId,
         offset: usize,
         data: &mut [u8],
-        now: Timestamp,
+        _now: Timestamp,
     ) -> Result<u64, ErrorKind> {
-        let mut file_block = self.read_file_block(file_id)?;
+        let file_block = self.read_file_block(file_id)?;
         let sz = file_block.read(self, offset, data)?;
         /*
          * TODO figure out what to do about atime.
@@ -1104,7 +1105,7 @@ impl<T: Storage> IronFs<T> {
 
             // Erase all the block_id contents.
             // This neesd to move on to next_inode etc file contents.
-            let mut file = File {
+            let file = File {
                 top_inode: FileId(block_id.0),
             };
             file.unlink(self)?;
@@ -1126,9 +1127,9 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
     let mut magic = [0u8; 4];
     magic.clone_from_slice(&bytes[0..4]);
     match BlockMagic(magic) {
-        DATA_BLOCK_MAGIC => Some(BlockMagicType::DataBlock),
-        FILE_INODE_MAGIC => Some(BlockMagicType::FileBlock),
-        FILE_INODE_EXT_MAGICK => Some(BlockMagicType::ExtFileBlock),
+        data_block::DATA_BLOCK_MAGIC => Some(BlockMagicType::DataBlock),
+        file_block::FILE_INODE_MAGIC => Some(BlockMagicType::FileBlock),
+        ext_file_block::EXT_FILE_BLOCK_MAGIC => Some(BlockMagicType::ExtFileBlock),
         SUPER_BLOCK_MAGIC => Some(BlockMagicType::SuperBlock),
         DIR_BLOCK_MAGIC => Some(BlockMagicType::DirInode),
         EXT_DIR_BLOCK_MAGIC => Some(BlockMagicType::DirInodeExt),

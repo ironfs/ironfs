@@ -6,7 +6,7 @@ use crate::IronFs;
 use log::info;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
-const FILE_INODE_MAGIC: BlockMagic = BlockMagic(*b"INOD");
+pub(crate) const FILE_INODE_MAGIC: BlockMagic = BlockMagic(*b"INOD");
 
 const NUM_BYTES_INITIAL_CONTENTS: usize = 1024;
 
@@ -102,9 +102,8 @@ impl FileBlock {
             if data_block_id == BLOCK_ID_NULL {
                 data[pos..pos + num_bytes].fill(0u8);
             } else {
-                let data_block = ironfs.read_data_block(&data_block_id)?;
                 // TODO verify CRC.
-                data_block.read(pos_in_block, &mut data[pos..pos + num_bytes]);
+                ironfs.read_data_block(&data_block_id)?.read(pos_in_block, &mut data[pos..pos + num_bytes])?;
             }
 
             pos += num_bytes;
@@ -200,7 +199,7 @@ impl FileBlock {
         file
     }
 
-    fn from_timestamp(now: Timestamp) -> Self {
+    fn _from_timestamp(now: Timestamp) -> Self {
         FileBlock {
             atime: now,
             mtime: now,

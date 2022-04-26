@@ -1,12 +1,12 @@
 use crate::data_block::DataBlock;
 use crate::error::ErrorKind;
 use crate::storage::Storage;
-use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
+use crate::util::{BlockId, BlockMagic, Crc, BLOCK_ID_NULL, CRC, CRC_INIT};
 use crate::IronFs;
 use log::{error, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
-const EXT_FILE_BLOCK_MAGICK: BlockMagic = BlockMagic(*b"EINO");
+pub(crate) const EXT_FILE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"EINO");
 
 const EXT_FILE_BLOCK_NUM_BLOCKS: usize = 1020;
 
@@ -173,7 +173,7 @@ impl ExtFileBlock {
 impl Default for ExtFileBlock {
     fn default() -> Self {
         ExtFileBlock {
-            magic: EXT_FILE_BLOCK_MAGICK,
+            magic: EXT_FILE_BLOCK_MAGIC,
             crc: CRC_INIT,
             next_inode: BLOCK_ID_NULL,
             reserved: 0,
