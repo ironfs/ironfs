@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 #![cfg_attr(not(test), no_std)]
 
 mod data_block;
@@ -345,12 +346,17 @@ impl File {
 
         while pos < end {
             assert_ne!(ext_file_block_inode_id, BLOCK_ID_NULL);
-            trace!("wr pos: {} offset: {} capacity: {} block_idx: {} block_idx * capacity: {}",
-                pos, offset, FileBlock::capacity(), ext_file_block_idx, ext_file_block_idx * ExtFileBlock::capacity());
+            trace!(
+                "wr pos: {} offset: {} capacity: {} block_idx: {} block_idx * capacity: {}",
+                pos,
+                offset,
+                FileBlock::capacity(),
+                ext_file_block_idx,
+                ext_file_block_idx * ExtFileBlock::capacity()
+            );
 
-            let mut pos_in_ext_file = (pos + offset
-                - FileBlock::capacity())
-                % ExtFileBlock::capacity();
+            let mut pos_in_ext_file =
+                (pos + offset - FileBlock::capacity()) % ExtFileBlock::capacity();
             trace!(
                 "wr pos in ext file: {} pos: {} end: {}",
                 pos_in_ext_file,
@@ -371,7 +377,10 @@ impl File {
                 trace!("wr read block id: {:x?}", ext_file_block_inode_id);
                 if ext_file_block.next_inode == BLOCK_ID_NULL {
                     let new_ext_file_block_inode_id = ironfs.acquire_free_block()?;
-                    trace!("Acquired new ext file block inode id: {:x}", new_ext_file_block_inode_id.0);
+                    trace!(
+                        "Acquired new ext file block inode id: {:x}",
+                        new_ext_file_block_inode_id.0
+                    );
                     let new_ext_file_block = ExtFileBlock::default();
                     ext_file_block.next_inode = new_ext_file_block_inode_id;
                     ironfs.write_ext_file_block(&ext_file_block_inode_id, &ext_file_block)?;
@@ -953,7 +962,11 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let bytes = ext_file.as_bytes();
-        trace!("writing ext file block lba_id: {:x?} with bytes len: {}", lba_id, bytes.len());
+        trace!(
+            "writing ext file block lba_id: {:x?} with bytes len: {}",
+            lba_id,
+            bytes.len()
+        );
         self.storage.write(lba_id, &bytes);
         Ok(())
     }
@@ -1163,8 +1176,12 @@ mod tests_util {
         }
         fn write(&mut self, lba: LbaId, data: &[u8]) {
             let start_addr = lba.0 * LBA_SIZE;
-            trace!("Writing lba id: {:x?} start_addr: {:x} end_addr: {:x}",
-                lba, start_addr, start_addr + data.len());
+            trace!(
+                "Writing lba id: {:x?} start_addr: {:x} end_addr: {:x}",
+                lba,
+                start_addr,
+                start_addr + data.len()
+            );
             self.0[start_addr..start_addr + data.len()].copy_from_slice(data);
         }
         fn erase(&mut self, lba: LbaId, num_lba: usize) {
@@ -1215,7 +1232,6 @@ mod tests {
 
     use super::*;
     use crate::tests_util::*;
-    use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
     fn valid_file_block_size() {
@@ -1294,27 +1310,28 @@ mod tests {
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let mut file = File::create(&mut ironfs, "big_file", 0, 0, 0).unwrap();
         let starting_pos = FileBlock::capacity();
-        trace!("Starting pos is: {}", starting_pos);
+        info!("Starting pos is: {}", starting_pos);
         let mut pos = starting_pos;
         for chunk in data.chunks(CHUNK_SIZE) {
             file.write(&mut ironfs, pos, &chunk[..]).unwrap();
             pos += CHUNK_SIZE;
         }
 
-        /*
         // Confirm that we have all zeroed data leading up to starting position.
         info!("Confirm that leading data is zeroed.");
         let mut zero_buf = vec![0u8; starting_pos];
-        file.read(&ironfs, 0, &mut zero_buf[..]);
+        file.read(&ironfs, 0, &mut zero_buf[..]).unwrap();
         assert_eq!(zero_buf, vec![0u8; starting_pos]);
 
-        info!("Confirm that we have valid counter string data");
+        info!("Read out file data.");
         let mut data2 = vec![0u8; NUM_BYTES];
         file.read(&ironfs, starting_pos, &mut data2).unwrap();
 
+        info!("Confirm that we have valid counter string data");
         let mut prev = None;
         for i in (0..data.len()).step_by(32) {
             if let Some(prev) = prev {
+                info!("inspecting section: {} to {}", prev, i);
                 let orig = String::from_utf8_lossy(&data[prev..i]);
                 let new = String::from_utf8_lossy(&data2[prev..i]);
                 assert_eq!(orig, new);
@@ -1322,7 +1339,6 @@ mod tests {
 
             prev = Some(i);
         }
-        */
     }
 
     /*

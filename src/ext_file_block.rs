@@ -134,8 +134,16 @@ impl ExtFileBlock {
                 // No block allocated means that there is a hole in the data likely because someone
                 // was writing and seeked forward into the file.
                 // Let's go ahead and populate the data_block with the missing data.
-                trace!("foo pos: {} capacity: {} mod: {}", pos, DataBlock::capacity(), pos % DataBlock::capacity());
-                let num_bytes = core::cmp::min(data.len() - (pos + offset), DataBlock::capacity() - ((pos + offset) % DataBlock::capacity()));
+                trace!(
+                    "foo pos: {} capacity: {} mod: {}",
+                    pos,
+                    DataBlock::capacity(),
+                    pos % DataBlock::capacity()
+                );
+                let num_bytes = core::cmp::min(
+                    data.len() - (pos + offset),
+                    DataBlock::capacity() - ((pos + offset) % DataBlock::capacity()),
+                );
                 trace!(
                     "Zeroing data with len: {} offset is: {} capacity: {} num_bytes: {} from pos begin: {} to end: {}",
                     data.len(),
@@ -186,9 +194,7 @@ impl Default for ExtFileBlock {
 mod tests {
 
     use super::*;
-    use crate::storage::{Geometry, LbaId, Storage};
     use crate::tests_util::*;
-    use crate::IronFs;
 
     #[test]
     fn test_ext_file_block_read() {

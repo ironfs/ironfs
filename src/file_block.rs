@@ -103,7 +103,9 @@ impl FileBlock {
                 data[pos..pos + num_bytes].fill(0u8);
             } else {
                 // TODO verify CRC.
-                ironfs.read_data_block(&data_block_id)?.read(pos_in_block, &mut data[pos..pos + num_bytes])?;
+                ironfs
+                    .read_data_block(&data_block_id)?
+                    .read(pos_in_block, &mut data[pos..pos + num_bytes])?;
             }
 
             pos += num_bytes;
@@ -213,9 +215,7 @@ impl FileBlock {
 mod tests {
 
     use super::*;
-    use crate::storage::{Geometry, LbaId, Storage};
     use crate::tests_util::*;
-    use crate::IronFs;
 
     use proptest::prelude::*;
     proptest! {
