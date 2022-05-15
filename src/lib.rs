@@ -286,7 +286,12 @@ impl File {
         offset: usize,
         data: &[u8],
     ) -> Result<usize, ErrorKind> {
-        info!("wr file offset: {} data len: {}", offset, data.len());
+        info!(
+            "wr file offset: {} data len: {} top_inode: {}",
+            offset,
+            data.len(),
+            self.top_inode.0
+        );
 
         let mut pos = 0;
         let end = data.len();
@@ -845,7 +850,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read data block");
+        debug!("Read data block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
         DataBlock::try_from(&bytes[..])
     }
@@ -857,7 +862,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read dir block");
+        debug!("Read dir block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
         DirInode::try_from(&bytes[..])
     }
@@ -881,7 +886,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read ext file block");
+        debug!("Read ext file block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
         ExtFileBlock::try_from(&bytes[..])
     }
@@ -978,7 +983,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(free_block_id.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read free block");
+        debug!("Read free block: {}", free_block_id.0);
         self.storage.read(lba_id, &mut bytes);
         let block: Option<(LayoutVerified<_, FreeBlock>, _)> =
             LayoutVerified::new_from_prefix(&bytes[..]);
@@ -1004,7 +1009,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(free_block_id.0);
         let bytes = free_block.as_bytes();
-        debug!("Write free block");
+        debug!("Write free block: {}", free_block_id.0);
         self.storage.write(lba_id, &bytes);
         Ok(())
     }
@@ -1260,6 +1265,7 @@ mod tests {
 
     #[test]
     fn test_big_file_write() {
+        init();
         const NUM_BYTES: usize = 3_000_000;
         let txt = rust_counter_strings::generate(NUM_BYTES);
         let data = txt.as_bytes();
@@ -1276,8 +1282,7 @@ mod tests {
 
     #[test]
     fn test_big_file_small_chunks_write() {
-        env_logger::init();
-
+        init();
         const NUM_BYTES: usize = 3_000_000;
         let txt = rust_counter_strings::generate(NUM_BYTES);
         let data = txt.as_bytes();
@@ -1300,8 +1305,7 @@ mod tests {
     /// properly write.
     #[test]
     fn test_write_internal_boundary_fail() {
-        env_logger::init();
-
+        init();
         const CHUNK_SIZE: usize = 8112;
         const NUM_BYTES: usize = 10_000;
         let txt = rust_counter_strings::generate(NUM_BYTES);
@@ -1344,8 +1348,7 @@ mod tests {
     /*
     #[test]
     fn test_write_ext_file_block_small_chunks() {
-        env_logger::init();
-
+            init();
         const NUM_BYTES: usize = 1_000_000;
         let txt = rust_counter_strings::generate(NUM_BYTES);
         let data = txt.as_bytes();

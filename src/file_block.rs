@@ -78,40 +78,56 @@ impl FileBlock {
         offset: usize,
         data: &mut [u8],
     ) -> Result<usize, ErrorKind> {
+        let file_size = self.size as usize;
+        if file_size == 0 {
+            // No file contents means we write no data.
+            return Ok(0);
+        }
+
         if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()))
         {
             return Err(ErrorKind::OutOfBounds);
         }
 
-        let mut pos = 0;
-        let end = core::cmp::min(self.size as usize, data.len());
+        let mut file_pos = offset;
+        let mut data_pos = 0;
 
-        if offset < NUM_BYTES_INITIAL_CONTENTS {
-            // Figure out how much of the data can be written into the initial contents.
-            let nbytes = core::cmp::min(end - offset, self.data.len());
-            data[..nbytes].copy_from_slice(&self.data[offset..offset + nbytes]);
-            pos += nbytes
+        // First are we reading data from initial contents ?
+        if file_pos < NUM_BYTES_INITIAL_CONTENTS {
+            let limits = [data.len(), file_size, NUM_BYTES_INITIAL_CONTENTS - file_pos];
+            let data_nbytes = *limits.iter().min().unwrap();
+            data[..data_nbytes].copy_from_slice(&self.data[file_pos..file_pos + data_nbytes]);
+
+            data_pos += data_nbytes;
+            file_pos += data_nbytes;
         }
 
-        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()) {
-            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
-            let data_block_id = self.blocks[idx];
-            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
-            let num_bytes = core::cmp::min(DataBlock::capacity() - pos_in_block, end - pos);
+        while data_pos < data.len() && file_pos < file_size && file_pos < FileBlock::capacity() {
+            // For each pass we're going to copy data from data block into user given data buffer.
+            let data_block_idx = (file_pos - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
+            let data_block_id = self.blocks[data_block_idx];
+            let pos_in_block = (file_pos - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
+            let limits = [
+                DataBlock::capacity() - pos_in_block,
+                file_size - file_pos,
+                data.len() - data_pos,
+            ];
+            let data_nbytes = *limits.iter().min().unwrap();
 
             if data_block_id == BLOCK_ID_NULL {
-                data[pos..pos + num_bytes].fill(0u8);
+                data[data_pos..data_pos + data_nbytes].fill(0u8);
             } else {
                 // TODO verify CRC.
                 ironfs
                     .read_data_block(&data_block_id)?
-                    .read(pos_in_block, &mut data[pos..pos + num_bytes])?;
+                    .read(pos_in_block, &mut data[data_pos..data_pos + data_nbytes])?;
             }
 
-            pos += num_bytes;
+            data_pos += data_nbytes;
+            file_pos += data_nbytes;
         }
 
-        Ok(pos)
+        Ok(data_pos)
     }
 
     pub(crate) fn write<T: Storage>(
@@ -126,36 +142,40 @@ impl FileBlock {
             return Err(ErrorKind::OutOfBounds);
         }
 
-        let mut pos = 0;
-        let end = data.len();
-        if offset < NUM_BYTES_INITIAL_CONTENTS {
-            let nbytes = core::cmp::min(end, self.data.len() - offset);
-            self.data[offset..offset + nbytes].copy_from_slice(&data[..nbytes]);
-            pos += nbytes;
+        let mut file_pos = offset;
+        let mut data_pos = 0;
+
+        if file_pos < NUM_BYTES_INITIAL_CONTENTS {
+            let nbytes = core::cmp::min(data.len(), NUM_BYTES_INITIAL_CONTENTS - file_pos);
+            self.data[file_pos..file_pos + nbytes].copy_from_slice(&data[..nbytes]);
+            data_pos += nbytes;
+            file_pos += nbytes;
         }
 
-        while pos < end && (pos + offset) < (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()) {
-            let idx = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
-            let (data_block_id, mut data_block) = if self.blocks[idx] == BLOCK_ID_NULL {
+        while data_pos < data.len() && file_pos < FileBlock::capacity() {
+            let data_block_idx = (file_pos - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
+            let (data_block_id, mut data_block) = if self.blocks[data_block_idx] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
-                self.blocks[idx] = id;
+                self.blocks[data_block_idx] = id;
                 (id, DataBlock::default())
             } else {
-                let id = self.blocks[idx];
+                let id = self.blocks[data_block_idx];
                 (id, ironfs.read_data_block(&id)?)
             };
-            let pos_in_block = (pos + offset - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
-            let num_bytes = core::cmp::min(DataBlock::capacity() - pos_in_block, end - pos);
-            data_block.write(pos_in_block, &data[pos..pos + num_bytes])?;
+            let pos_in_block = (file_pos - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
+            let num_bytes =
+                core::cmp::min(DataBlock::capacity() - pos_in_block, data.len() - data_pos);
+            data_block.write(pos_in_block, &data[data_pos..data_pos + num_bytes])?;
             data_block.fix_crc();
             ironfs.write_data_block(&data_block_id, &data_block)?;
 
-            pos += num_bytes;
+            data_pos += num_bytes;
+            file_pos += num_bytes;
         }
 
-        self.size = core::cmp::max(self.size as u64, (pos + offset) as u64);
+        self.size = core::cmp::max(self.size as u64, data_pos as u64);
 
-        Ok(pos)
+        Ok(data_pos)
     }
 
     pub(crate) fn unlink_data<T: Storage>(&self, ironfs: &mut IronFs<T>) -> Result<(), ErrorKind> {
@@ -216,6 +236,58 @@ mod tests {
 
     use super::*;
     use crate::tests_util::*;
+
+    #[test]
+    fn test_read_with_no_data() {
+        init();
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
+        let mut block = FileBlock::default();
+
+        let mut data = vec![0u8; NUM_BYTES_INITIAL_CONTENTS];
+        block.read(&ironfs, 1, &mut data[..]).unwrap();
+    }
+
+    #[test]
+    fn test_read_after_too_little_written() {
+        init();
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
+        let mut block = FileBlock::default();
+
+        let mut data = vec![0u8; NUM_BYTES_INITIAL_CONTENTS];
+        block.write(&mut ironfs, 0, &data[..99]).unwrap();
+        block.read(&ironfs, 1, &mut data[..]).unwrap();
+    }
+
+    #[test]
+    fn test_write_across_data_block() {
+        init();
+        const OFFSET: usize = 931;
+        let data_len = DataBlock::capacity();
+        let txt = rust_counter_strings::generate(data_len);
+        let data = txt.as_bytes();
+
+        info!("Configured filesystem.");
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
+        let mut block = FileBlock::default();
+
+        info!("Writing data for test");
+        block
+            .write(&mut ironfs, NUM_BYTES_INITIAL_CONTENTS + OFFSET, &data[..])
+            .unwrap();
+
+        info!("Reading data back.");
+        let mut data2 = vec![0u8; data_len + OFFSET + NUM_BYTES_INITIAL_CONTENTS];
+        block.read(&ironfs, 0, &mut data2[..]).unwrap();
+
+        // We expect value 0x00 from start to OFFSET + NUM_BYTES_INITIAL_CONTENTS.
+        info!("Confirming part of the data is empty.");
+        let empty = vec![0u8; OFFSET + NUM_BYTES_INITIAL_CONTENTS];
+        assert_eq!(&data2[..OFFSET + NUM_BYTES_INITIAL_CONTENTS], empty);
+
+        // Now confirm we wrote data across data blocks properly.
+        info!("Confirm we wrote data properly");
+        assert_eq!(&data[..], &data2[OFFSET + NUM_BYTES_INITIAL_CONTENTS..]);
+    }
 
     use proptest::prelude::*;
     proptest! {
