@@ -240,8 +240,8 @@ mod tests {
     #[test]
     fn test_read_with_no_data() {
         init();
-        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
-        let mut block = FileBlock::default();
+        let ironfs = make_filesystem(RamStorage::new(2_usize.pow(20)));
+        let block = FileBlock::default();
 
         let mut data = vec![0u8; NUM_BYTES_INITIAL_CONTENTS];
         block.read(&ironfs, 1, &mut data[..]).unwrap();
