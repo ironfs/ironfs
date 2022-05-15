@@ -1,6 +1,6 @@
 use crate::error::ErrorKind;
 use crate::util::{BlockMagic, Crc, CRC, CRC_INIT};
-use log::error;
+use log::{debug, error};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const DATA_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DATA");
@@ -51,12 +51,22 @@ impl DataBlock {
 
     pub(crate) fn read(&self, offset: usize, data: &mut [u8]) -> Result<usize, ErrorKind> {
         let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - offset, data.len());
+        debug!(
+            "Reading data block from {} to {}",
+            offset,
+            offset + num_bytes
+        );
         data[..num_bytes].copy_from_slice(&self.data[offset..offset + num_bytes]);
         Ok(num_bytes)
     }
 
     pub(crate) fn write(&mut self, offset: usize, data: &[u8]) -> Result<usize, ErrorKind> {
         let num_bytes = core::cmp::min(DATA_BLOCK_NUM_BYTES - offset, data.len());
+        debug!(
+            "Writing data block from {} to {}",
+            offset,
+            offset + num_bytes
+        );
         self.data[offset..offset + num_bytes].copy_from_slice(&data[..num_bytes]);
         self.fix_crc();
         Ok(num_bytes)

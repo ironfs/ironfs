@@ -3,7 +3,7 @@ use crate::error::ErrorKind;
 use crate::storage::Storage;
 use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
 use crate::IronFs;
-use log::info;
+use log::{debug, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const FILE_INODE_MAGIC: BlockMagic = BlockMagic(*b"INOD");
@@ -27,7 +27,7 @@ pub(crate) struct FileBlock {
     pub(crate) group: u16,
     pub(crate) perms: u32,
     pub(crate) size: u64,
-    data: [u8; NUM_BYTES_INITIAL_CONTENTS],
+    initial_contents: [u8; NUM_BYTES_INITIAL_CONTENTS],
     blocks: [BlockId; NUM_DATA_BLOCKS_IN_FILE],
 }
 
@@ -47,7 +47,7 @@ impl Default for FileBlock {
             group: 0,
             perms: 0,
             size: 0,
-            data: [0u8; 1024],
+            initial_contents: [0u8; 1024],
             blocks: [BLOCK_ID_NULL; NUM_DATA_BLOCKS_IN_FILE],
         }
     }
@@ -96,7 +96,8 @@ impl FileBlock {
         if file_pos < NUM_BYTES_INITIAL_CONTENTS {
             let limits = [data.len(), file_size, NUM_BYTES_INITIAL_CONTENTS - file_pos];
             let data_nbytes = *limits.iter().min().unwrap();
-            data[..data_nbytes].copy_from_slice(&self.data[file_pos..file_pos + data_nbytes]);
+            data[..data_nbytes]
+                .copy_from_slice(&self.initial_contents[file_pos..file_pos + data_nbytes]);
 
             data_pos += data_nbytes;
             file_pos += data_nbytes;
@@ -112,6 +113,8 @@ impl FileBlock {
                 file_size - file_pos,
                 data.len() - data_pos,
             ];
+            trace!("Read data from block: {:?} with idx: {} pos_in_block: {} file_pos: {} file_size: {} data_pos: {} data.len: {}",
+        data_block_id, data_block_idx, pos_in_block, file_pos, file_size, data_pos, data.len());
             let data_nbytes = *limits.iter().min().unwrap();
 
             if data_block_id == BLOCK_ID_NULL {
@@ -147,7 +150,12 @@ impl FileBlock {
 
         if file_pos < NUM_BYTES_INITIAL_CONTENTS {
             let nbytes = core::cmp::min(data.len(), NUM_BYTES_INITIAL_CONTENTS - file_pos);
-            self.data[file_pos..file_pos + nbytes].copy_from_slice(&data[..nbytes]);
+            info!(
+                "Writing initial contents: {} to {}.",
+                file_pos,
+                file_pos + nbytes
+            );
+            self.initial_contents[file_pos..file_pos + nbytes].copy_from_slice(&data[..nbytes]);
             data_pos += nbytes;
             file_pos += nbytes;
         }
@@ -156,6 +164,7 @@ impl FileBlock {
             let data_block_idx = (file_pos - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
             let (data_block_id, mut data_block) = if self.blocks[data_block_idx] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
+                trace!("File block acquired free block: {:?}", id);
                 self.blocks[data_block_idx] = id;
                 (id, DataBlock::default())
             } else {
@@ -165,6 +174,8 @@ impl FileBlock {
             let pos_in_block = (file_pos - NUM_BYTES_INITIAL_CONTENTS) % DataBlock::capacity();
             let num_bytes =
                 core::cmp::min(DataBlock::capacity() - pos_in_block, data.len() - data_pos);
+            trace!("Write data from block: {:?} with idx: {} pos_in_block: {} file_pos: {} data_pos: {} data.len: {}",
+        data_block_id, data_block_idx, pos_in_block, file_pos, data_pos, data.len());
             data_block.write(pos_in_block, &data[data_pos..data_pos + num_bytes])?;
             data_block.fix_crc();
             ironfs.write_data_block(&data_block_id, &data_block)?;
@@ -173,7 +184,7 @@ impl FileBlock {
             file_pos += num_bytes;
         }
 
-        self.size = core::cmp::max(self.size as u64, data_pos as u64);
+        self.size = core::cmp::max(self.size as u64, file_pos as u64);
 
         Ok(data_pos)
     }
@@ -181,6 +192,7 @@ impl FileBlock {
     pub(crate) fn unlink_data<T: Storage>(&self, ironfs: &mut IronFs<T>) -> Result<(), ErrorKind> {
         for id in self.blocks {
             if id != BLOCK_ID_NULL {
+                info!("Unlink data releasing block: {:?}", id);
                 ironfs.release_block(id)?;
             }
         }

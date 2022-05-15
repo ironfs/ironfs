@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 #![allow(dead_code)]
 #![cfg_attr(not(test), no_std)]
 
@@ -580,7 +581,7 @@ impl<T: Storage> IronFs<T> {
             return Err(ErrorKind::InconsistentState);
         }
         let lba_id = self.id_to_lba(entry.0);
-        debug!("Read block");
+        debug!("Read block: {:?}", lba_id);
         self.storage.read(lba_id, bytes);
         Ok(())
     }
@@ -725,12 +726,15 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(free_block_id.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read free block: {}", free_block_id.0);
         self.storage.read(lba_id, &mut bytes);
         let block: Option<(LayoutVerified<_, FreeBlock>, _)> =
             LayoutVerified::new_from_prefix(&bytes[..]);
         if let Some((block, _)) = block {
             if block.magic != FREE_BLOCK_MAGIC {
+                error!(
+                    "Block {:?} was supposed to be free and was not.",
+                    free_block_id
+                );
                 return Err(ErrorKind::InconsistentState);
             }
 
@@ -751,7 +755,6 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(free_block_id.0);
         let bytes = free_block.as_bytes();
-        debug!("Write free block: {}", free_block_id.0);
         self.storage.write(lba_id, &bytes);
         Ok(())
     }
@@ -766,6 +769,7 @@ impl<T: Storage> IronFs<T> {
         self.next_free_block_id = free_block.next_free_id;
 
         if free_block.prev_free_id == free_block.next_free_id {
+            debug!("Out of free blocks.");
             self.next_free_block_id = BLOCK_ID_NULL;
         } else {
             let mut prev_free_block = self.read_free_block(&free_block.prev_free_id)?;
@@ -776,7 +780,14 @@ impl<T: Storage> IronFs<T> {
             next_free_block.fix_crc();
             self.write_free_block(&free_block.prev_free_id, &prev_free_block)?;
             self.write_free_block(&free_block.next_free_id, &next_free_block)?;
+            trace!(
+                "Updated free blocks: {:?} {:?}",
+                free_block.prev_free_id,
+                free_block.next_free_id
+            );
         }
+
+        debug!("Acquired free block: {:?}", free_block_id);
 
         Ok(free_block_id)
     }
@@ -785,6 +796,8 @@ impl<T: Storage> IronFs<T> {
         if cur_free_block_id == BLOCK_ID_NULL {
             return Err(ErrorKind::InconsistentState);
         }
+
+        trace!("Releasing block: {:?}", cur_free_block_id);
 
         let next_free_block_id = self.next_free_block_id;
         let mut next_free_block = self.read_free_block(&next_free_block_id)?;
