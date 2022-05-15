@@ -3,7 +3,7 @@ use crate::error::ErrorKind;
 use crate::storage::Storage;
 use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
 use crate::IronFs;
-use log::{debug, info, trace};
+use log::{info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const FILE_INODE_MAGIC: BlockMagic = BlockMagic(*b"INOD");

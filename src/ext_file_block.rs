@@ -82,7 +82,7 @@ impl ExtFileBlock {
             let num_bytes =
                 data_block.write((pos + offset) % DataBlock::capacity(), &data[pos..])?;
             trace!(
-                "writing data block pos: {} offset: {} pos+offset: {} i: {} (idx: {} of max_idx: {}) id: {:?} with contents: {:?}",
+                "writing data block pos: {} offset: {} pos+offset: {} i: {} (idx: {} of max_idx: {}) id: {:?}",
                 pos,
                 offset,
                 pos + offset,
@@ -90,7 +90,6 @@ impl ExtFileBlock {
                 idx,
                 max_idx,
                 data_block_id,
-                data_block
             );
             pos += num_bytes;
             total_bytes += num_bytes;

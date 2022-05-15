@@ -990,7 +990,6 @@ mod tests {
 
     use super::*;
     use crate::tests_util::*;
-    use log::info;
 
     #[test]
     fn valid_file_block_size() {
@@ -1053,50 +1052,6 @@ mod tests {
         file.read(&ironfs, 0, &mut data2).unwrap();
 
         assert_eq!(data, data2);
-    }
-
-    /// Test the condition where we cross a portion of an internal boundary and have a failure to
-    /// properly write.
-    #[test]
-    fn test_write_internal_boundary_fail() {
-        init();
-        const CHUNK_SIZE: usize = 8112;
-        const NUM_BYTES: usize = 10_000;
-        let txt = rust_counter_strings::generate(NUM_BYTES);
-        let data = txt.as_bytes();
-
-        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
-        let mut file = File::create(&mut ironfs, "big_file", 0, 0, 0).unwrap();
-        let starting_pos = FileBlock::capacity();
-        info!("Starting pos is: {}", starting_pos);
-        let mut pos = starting_pos;
-        for chunk in data.chunks(CHUNK_SIZE) {
-            file.write(&mut ironfs, pos, &chunk[..]).unwrap();
-            pos += CHUNK_SIZE;
-        }
-
-        // Confirm that we have all zeroed data leading up to starting position.
-        info!("Confirm that leading data is zeroed.");
-        let mut zero_buf = vec![0u8; starting_pos];
-        file.read(&ironfs, 0, &mut zero_buf[..]).unwrap();
-        assert_eq!(zero_buf, vec![0u8; starting_pos]);
-
-        info!("Read out file data.");
-        let mut data2 = vec![0u8; NUM_BYTES];
-        file.read(&ironfs, starting_pos, &mut data2).unwrap();
-
-        info!("Confirm that we have valid counter string data");
-        let mut prev = None;
-        for i in (0..data.len()).step_by(32) {
-            if let Some(prev) = prev {
-                info!("inspecting section: {} to {}", prev, i);
-                let orig = String::from_utf8_lossy(&data[prev..i]);
-                let new = String::from_utf8_lossy(&data2[prev..i]);
-                assert_eq!(orig, new);
-            }
-
-            prev = Some(i);
-        }
     }
 
     /*
