@@ -194,6 +194,10 @@ impl File {
         }
 
         if data_pos == data.len() {
+            if (file_block.size as usize) < file_pos {
+                file_block.size = file_pos as u64;
+            }
+            ironfs.write_file_block(&self.top_inode, &file_block)?;
             return Ok(data_pos);
         }
 
@@ -300,8 +304,8 @@ impl File {
 
         if (file_block.size as usize) < file_pos {
             file_block.size = file_pos as u64;
-            ironfs.write_file_block(&self.top_inode, &file_block)?;
         }
+        ironfs.write_file_block(&self.top_inode, &file_block)?;
 
         Ok(data_pos)
     }

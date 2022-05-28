@@ -167,6 +167,8 @@ impl Default for ExtFileBlock {
 #[cfg(test)]
 mod tests {
 
+use log::{debug, error, info, trace};
+
     use super::*;
     use crate::tests_util::*;
 

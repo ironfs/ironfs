@@ -22,7 +22,7 @@ use util::BLOCK_ID_NULL;
 pub use util::{BlockId, NAME_NLEN};
 use util::{Crc, CRC, CRC_INIT};
 
-use log::{debug, error, trace, warn};
+use log::{debug, error, info, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
@@ -1052,7 +1052,16 @@ mod tests {
         let mut data2 = vec![0u8; NUM_BYTES];
         file.read(&ironfs, 0, &mut data2).unwrap();
 
-        assert_eq!(data, data2);
+        let mut prev = None;
+        for i in (0..data.len()).step_by(32) {
+            if let Some(prev) = prev {
+                info!("inspecting section: {} to {}", prev, i);
+                let orig = String::from_utf8_lossy(&data[prev..i]);
+                let new = String::from_utf8_lossy(&data2[prev..i]);
+                assert_eq!(orig, new);
+            }
+            prev = Some(i);
+        }
     }
 
     /*

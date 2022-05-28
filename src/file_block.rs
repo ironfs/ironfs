@@ -3,7 +3,7 @@ use crate::error::ErrorKind;
 use crate::storage::Storage;
 use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
 use crate::IronFs;
-use log::{info, trace};
+use log::{debug, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const FILE_INODE_MAGIC: BlockMagic = BlockMagic(*b"INOD");
@@ -80,12 +80,14 @@ impl FileBlock {
     ) -> Result<usize, ErrorKind> {
         let file_size = self.size as usize;
         if file_size == 0 {
+            info!("Attempt to read zero sized file.");
             // No file contents means we write no data.
             return Ok(0);
         }
 
         if offset > (NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity()))
         {
+            info!("Offset was out of bounds for reading file block.");
             return Err(ErrorKind::OutOfBounds);
         }
 
@@ -245,6 +247,7 @@ impl FileBlock {
 
 #[cfg(test)]
 mod tests {
+use log::{debug, info, trace};
 
     use super::*;
     use crate::tests_util::*;
