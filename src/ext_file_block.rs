@@ -3,7 +3,7 @@ use crate::error::ErrorKind;
 use crate::storage::Storage;
 use crate::util::{BlockId, BlockMagic, Crc, BLOCK_ID_NULL, CRC, CRC_INIT};
 use crate::IronFs;
-use log::{error, info, trace};
+use log::{debug, error, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const EXT_FILE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"EINO");
@@ -61,7 +61,10 @@ impl ExtFileBlock {
 
             let (data_block_id, mut data_block) = if self.blocks[data_block_idx] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
-                trace!("Ext file block acquired free block: {:?}", id);
+                trace!(
+                    "Ext file block acquired free block for data block: {:?}",
+                    id
+                );
                 self.blocks[data_block_idx] = id;
                 (id, DataBlock::default())
             } else {
@@ -71,7 +74,7 @@ impl ExtFileBlock {
             let pos_in_block = ext_file_pos % DataBlock::capacity();
             let num_bytes =
                 core::cmp::min(DataBlock::capacity() - pos_in_block, data.len() - data_pos);
-            trace!("Ext Write data from block: {:?} with idx: {} pos_in_block: {} num_bytes: {} file_pos: {} data_pos: {} data.len: {}",
+            debug!("Ext Write data from block: {:?} with idx: {} pos_in_block: {} num_bytes: {} file_pos: {} data_pos: {} data.len: {}",
         data_block_id, data_block_idx, pos_in_block, num_bytes, ext_file_pos, data_pos, data.len());
             data_block.write(pos_in_block, &data[data_pos..data_pos + num_bytes])?;
             data_block.fix_crc();
@@ -95,6 +98,10 @@ impl ExtFileBlock {
 
         let mut ext_file_pos = offset % ExtFileBlock::capacity();
         let mut data_pos = 0;
+        debug!(
+            "Reading data from ext file block starting at ext file pos: {} with data_pos: {}",
+            ext_file_pos, data_pos
+        );
 
         while data_pos < data.len() && ext_file_pos < ExtFileBlock::capacity() {
             let data_block_idx = ext_file_pos / DataBlock::capacity();
@@ -104,7 +111,7 @@ impl ExtFileBlock {
             let num_bytes =
                 core::cmp::min(DataBlock::capacity() - pos_in_block, data.len() - data_pos);
 
-            trace!("Ext Read data from block: {:?} with idx: {} pos_in_block: {} num_bytes: {} file_pos: {} data_pos: {} data.len: {}",
+            debug!("Ext Read data from block: {:x?} with idx: {} pos_in_block: {} num_bytes: {} file_pos: {} data_pos: {} data.len: {}",
         data_block_id, data_block_idx, pos_in_block, num_bytes, ext_file_pos, data_pos, data.len());
 
             if data_block_id == BLOCK_ID_NULL {

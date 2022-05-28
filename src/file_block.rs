@@ -164,7 +164,7 @@ impl FileBlock {
             let data_block_idx = (file_pos - NUM_BYTES_INITIAL_CONTENTS) / DataBlock::capacity();
             let (data_block_id, mut data_block) = if self.blocks[data_block_idx] == BLOCK_ID_NULL {
                 let id = ironfs.acquire_free_block()?;
-                trace!("File block acquired free block: {:?}", id);
+                trace!("Acquired free block for data block: {:?}", id);
                 self.blocks[data_block_idx] = id;
                 (id, DataBlock::default())
             } else {

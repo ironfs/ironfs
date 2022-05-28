@@ -2,7 +2,7 @@ use crate::{
     ext_file_block::ExtFileBlock, util::BLOCK_ID_NULL, BlockId, ErrorKind, FileBlock, FileId,
     IronFs, Storage, Timestamp,
 };
-use log::{info, trace};
+use log::{debug, info, trace};
 
 pub(crate) struct File {
     top_inode: FileId,
@@ -31,6 +31,7 @@ impl File {
         _group: u16,
     ) -> Result<Self, ErrorKind> {
         let file_block_id = ironfs.acquire_free_block()?;
+        debug!("Acquired free block for creating file: {:?}", file_block_id);
         let file_block_id = FileId(file_block_id.0);
         let file_block = FileBlock::new(&ironfs.cur_timestamp(), name.as_bytes(), perms);
         ironfs.write_file_block(&file_block_id, &file_block)?;
@@ -166,10 +167,11 @@ impl File {
         let mut file_block = ironfs.read_file_block(&self.top_inode)?;
         let file_size = file_block.size as usize;
 
-        info!(
-            "wr file_pos: {} capacity: {} file_size: {} data len: {} top_inode: {}",
+        debug!(
+            "wr file_pos: {} file_block::capacity: {} ext_file_block::capacity: {} file_size: {} data len: {} top_inode: {}",
             file_pos,
             FileBlock::capacity(),
+            ExtFileBlock::capacity(),
             file_size,
             data.len(),
             self.top_inode.0
@@ -205,6 +207,10 @@ impl File {
         let mut ext_file_block_inode_id = file_block.next_inode;
         let mut ext_file_block = if file_block.next_inode == BLOCK_ID_NULL {
             ext_file_block_inode_id = ironfs.acquire_free_block()?;
+            debug!(
+                "Acquired free block for ext file block: {:?}",
+                ext_file_block_inode_id
+            );
             file_block.next_inode = ext_file_block_inode_id;
             ironfs.write_file_block(&self.top_inode, &file_block)?;
             trace!("Created new ext block: {:?}", ext_file_block_inode_id);
@@ -226,6 +232,10 @@ impl File {
             );
             if ext_file_block_inode_id == BLOCK_ID_NULL {
                 let new_ext_file_block_inode_id = ironfs.acquire_free_block()?;
+                debug!(
+                    "Acquired free block for new ext file block: {:?}",
+                    new_ext_file_block_inode_id
+                );
                 let new_ext_file_block = ExtFileBlock::default();
                 ext_file_block.next_inode = new_ext_file_block_inode_id;
                 ironfs.write_ext_file_block(&ext_file_block_inode_id, &ext_file_block)?;
@@ -267,10 +277,11 @@ impl File {
             if pos_in_ext_file < ExtFileBlock::capacity() {
                 ironfs.write_ext_file_block(&ext_file_block_inode_id, &ext_file_block)?;
             } else {
+                debug!("We've reached end of ext file block and need to carve a new block.");
                 trace!("wr read block id: {:x?}", ext_file_block_inode_id);
                 if ext_file_block.next_inode == BLOCK_ID_NULL {
                     let new_ext_file_block_inode_id = ironfs.acquire_free_block()?;
-                    trace!(
+                    debug!(
                         "Acquired new ext file block inode id: {:x}",
                         new_ext_file_block_inode_id.0
                     );
@@ -302,6 +313,7 @@ mod tests {
     use super::*;
     use crate::tests_util::*;
     use log::info;
+    use proptest::strategy::W;
 
     #[test]
     fn test_small_write_across_file_block_boundary() {
@@ -339,6 +351,54 @@ mod tests {
     }
 
     #[test]
+    fn test_write_first_ext_boundary_fail() {
+        init();
+        const CHUNK_SIZE: usize = 4;
+        const NUM_BYTES: usize = 9;
+        let txt = rust_counter_strings::generate(NUM_BYTES);
+        let data = txt.as_bytes();
+
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
+        let mut file = File::create(&mut ironfs, "big_file", 0, 0, 0).unwrap();
+        let starting_pos = FileBlock::capacity() - 3;
+
+        info!("Writing small amount of data in small increments.");
+        let mut pos = starting_pos;
+        for chunk in data.chunks(CHUNK_SIZE) {
+            file.write(&mut ironfs, pos, &chunk[..]).unwrap();
+            pos += CHUNK_SIZE;
+        }
+
+        info!("Read back data we didn't write.");
+        let mut data2 = vec![0u8; starting_pos];
+        file.read(&ironfs, 0, &mut data2[..]).unwrap();
+
+        info!("Confirm that leading data is zeroed.");
+        let zero_buf = vec![0u8; starting_pos];
+        let mut prev = None;
+        for i in (0..data2.len()).step_by(32) {
+            if let Some(prev) = prev {
+                info!(
+                    "inspecting FileBlock.capacity: {} ExtFileBlock.capacity: {} section: {} to {}",
+                    FileBlock::capacity(),
+                    ExtFileBlock::capacity(),
+                    prev,
+                    i
+                );
+                assert_eq!(&data2[prev..i], &zero_buf[prev..i]);
+            }
+            prev = Some(i);
+        }
+
+        info!("Read out data we did write");
+        let mut data2 = vec![0u8; NUM_BYTES];
+        file.read(&ironfs, starting_pos, &mut data2).unwrap();
+
+        info!("Confirm that we have valid counter string data");
+        assert_eq!(data, data2);
+    }
+
+    #[test]
     fn test_write_ext_boundary_fail() {
         init();
         const CHUNK_SIZE: usize = 4;
@@ -361,12 +421,25 @@ mod tests {
         let mut data2 = vec![0u8; starting_pos];
         file.read(&ironfs, 0, &mut data2[..]).unwrap();
 
-        info!("Confirm that leading data is zeroed.");
         let zero_buf = vec![0u8; starting_pos];
+        info!("Check for issue where we accidentally wrote to start of previous ext file block {} to {}",
+    FileBlock::capacity(), FileBlock::capacity() + 32);
+        assert_eq!(
+            &data2[FileBlock::capacity()..FileBlock::capacity() + 32],
+            &zero_buf[..32]
+        );
+
+        info!("Confirm that leading data is zeroed.");
         let mut prev = None;
         for i in (0..data2.len()).step_by(32) {
             if let Some(prev) = prev {
-                info!("inspecting section: {} to {}", prev, i);
+                info!(
+                    "inspecting FileBlock.capacity: {} ExtFileBlock.capacity: {} section: {} to {}",
+                    FileBlock::capacity(),
+                    ExtFileBlock::capacity(),
+                    prev,
+                    i
+                );
                 assert_eq!(&data2[prev..i], &zero_buf[prev..i]);
             }
             prev = Some(i);

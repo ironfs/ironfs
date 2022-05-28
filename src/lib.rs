@@ -22,7 +22,7 @@ use util::BLOCK_ID_NULL;
 pub use util::{BlockId, NAME_NLEN};
 use util::{Crc, CRC, CRC_INIT};
 
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
@@ -593,7 +593,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read data block: {}", entry.0);
+        trace!("Read data block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
         DataBlock::try_from(&bytes[..])
     }
@@ -605,7 +605,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read dir block: {}", entry.0);
+        trace!("Read dir block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
         DirInode::try_from(&bytes[..])
     }
@@ -617,7 +617,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read file block");
+        trace!("Read file block");
         self.storage.read(lba_id, &mut bytes);
         FileBlock::try_from(&bytes[..])
     }
@@ -629,25 +629,25 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(entry.0);
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Read ext file block: {}", entry.0);
+        trace!("Read ext file block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
         ExtFileBlock::try_from(&bytes[..])
     }
 
     fn read_super_block(&mut self) -> Result<SuperBlock, ErrorKind> {
         let mut bytes = [0u8; BLOCK_SIZE];
-        debug!("Reading super block");
+        trace!("Reading super block");
         self.storage.read(LbaId(0), &mut bytes);
         let block: Option<LayoutVerified<_, SuperBlock>> = LayoutVerified::new(&bytes[..]);
         if let Some(block) = block {
             if block.magic != SUPER_BLOCK_MAGIC {
-                debug!("Failed to read proper super block magic.");
+                warn!("Failed to read proper super block magic.");
                 return Err(ErrorKind::InconsistentState);
             }
 
             return Ok((*block).clone());
         } else {
-            debug!("Failed to create verified layout of superblock");
+            warn!("Failed to create verified layout of superblock");
             return Err(ErrorKind::InconsistentState);
         }
     }
@@ -769,7 +769,7 @@ impl<T: Storage> IronFs<T> {
         self.next_free_block_id = free_block.next_free_id;
 
         if free_block.prev_free_id == free_block.next_free_id {
-            debug!("Out of free blocks.");
+            warn!("Out of free blocks.");
             self.next_free_block_id = BLOCK_ID_NULL;
         } else {
             let mut prev_free_block = self.read_free_block(&free_block.prev_free_id)?;
@@ -787,7 +787,7 @@ impl<T: Storage> IronFs<T> {
             );
         }
 
-        debug!("Acquired free block: {:?}", free_block_id);
+        trace!("Acquired free block: {:?}", free_block_id);
 
         Ok(free_block_id)
     }
@@ -981,6 +981,7 @@ mod tests_util {
             }
             _ => {}
         };
+        debug!("Filesystem made and formatted");
         ironfs
     }
 }
