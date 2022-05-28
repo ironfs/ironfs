@@ -264,7 +264,7 @@ impl File {
             pos_in_ext_file += num_bytes;
             trace!("wr pos_in_ext_file: {}", pos_in_ext_file);
 
-            if pos_in_ext_file == ExtFileBlock::capacity() {
+            if pos_in_ext_file < ExtFileBlock::capacity() {
                 ironfs.write_ext_file_block(&ext_file_block_inode_id, &ext_file_block)?;
             } else {
                 trace!("wr read block id: {:x?}", ext_file_block_inode_id);
