@@ -1,5 +1,5 @@
 use crate::{
-    ext_file_block::ExtFileBlock, util::BLOCK_ID_NULL, BlockId, ErrorKind, FileBlock, FileId,
+    ext_file_block::FileBlockExt, util::BLOCK_ID_NULL, BlockId, ErrorKind, FileBlock, FileId,
     IronFs, Storage, Timestamp,
 };
 use log::{debug, info, trace};
@@ -98,7 +98,7 @@ impl File {
         }
 
         // Navigate forward through the ext file blocks until we find the one we're writing into.
-        let end_idx: usize = (file_pos - FileBlock::capacity()) / ExtFileBlock::capacity();
+        let end_idx: usize = (file_pos - FileBlock::capacity()) / FileBlockExt::capacity();
         let mut ext_file_block_inode_id = file_block.next_inode;
         let mut ext_file_block = ironfs.read_ext_file_block(&ext_file_block_inode_id)?;
         for i in 0..end_idx {
@@ -119,7 +119,7 @@ impl File {
             assert_ne!(ext_file_block_inode_id, BLOCK_ID_NULL);
 
             let mut pos_in_ext_file =
-                file_pos - FileBlock::capacity() - (ext_file_block_idx * ExtFileBlock::capacity());
+                file_pos - FileBlock::capacity() - (ext_file_block_idx * FileBlockExt::capacity());
             trace!(
                 "rd pos in ext file: {} file_pos: {} end: {} data_pos: {} data_len: {}",
                 pos_in_ext_file,
@@ -171,7 +171,7 @@ impl File {
             "wr file_pos: {} file_block::capacity: {} ext_file_block::capacity: {} file_size: {} data len: {} top_inode: {}",
             file_pos,
             FileBlock::capacity(),
-            ExtFileBlock::capacity(),
+            FileBlockExt::capacity(),
             file_size,
             data.len(),
             self.top_inode.0
@@ -207,7 +207,7 @@ impl File {
 
         // Navigate through existing ext file inode blocks loading each successive id until we
         // reach the place where we intend to read data.
-        let end_idx: usize = (file_pos - FileBlock::capacity()) / ExtFileBlock::capacity();
+        let end_idx: usize = (file_pos - FileBlock::capacity()) / FileBlockExt::capacity();
         let mut ext_file_block_inode_id = file_block.next_inode;
         let mut ext_file_block = if file_block.next_inode == BLOCK_ID_NULL {
             ext_file_block_inode_id = ironfs.acquire_free_block()?;
@@ -218,7 +218,7 @@ impl File {
             file_block.next_inode = ext_file_block_inode_id;
             ironfs.write_file_block(&self.top_inode, &file_block)?;
             trace!("Created new ext block: {:?}", ext_file_block_inode_id);
-            ExtFileBlock::default()
+            FileBlockExt::default()
         } else {
             trace!("Read existing ext block: {:?}", ext_file_block_inode_id);
             ironfs.read_ext_file_block(&ext_file_block_inode_id)?
@@ -240,7 +240,7 @@ impl File {
                     "Acquired free block for new ext file block: {:?}",
                     new_ext_file_block_inode_id
                 );
-                let new_ext_file_block = ExtFileBlock::default();
+                let new_ext_file_block = FileBlockExt::default();
                 ext_file_block.next_inode = new_ext_file_block_inode_id;
                 ironfs.write_ext_file_block(&ext_file_block_inode_id, &ext_file_block)?;
                 ext_file_block_inode_id = new_ext_file_block_inode_id;
@@ -254,7 +254,7 @@ impl File {
         while data_pos < data.len() {
             assert_ne!(ext_file_block_inode_id, BLOCK_ID_NULL);
 
-            let mut pos_in_ext_file = (file_pos - FileBlock::capacity()) % ExtFileBlock::capacity();
+            let mut pos_in_ext_file = (file_pos - FileBlock::capacity()) % FileBlockExt::capacity();
             trace!(
                 "wr data_pos: {} data_len: {} file_pos: {} file_len: {} offset: {} ext_file_block_inode_id: {:?} ext_file_block_idx: {} pos_in_ext_file: {} capacity: {} block_idx: {} block_idx * capacity: {}",
                 data_pos,
@@ -267,7 +267,7 @@ impl File {
                 pos_in_ext_file,
                 FileBlock::capacity(),
                 ext_file_block_idx,
-                ext_file_block_idx * ExtFileBlock::capacity()
+                ext_file_block_idx * FileBlockExt::capacity()
             );
 
             let num_bytes = ext_file_block.write(ironfs, pos_in_ext_file, &data[data_pos..])?;
@@ -278,7 +278,7 @@ impl File {
             pos_in_ext_file += num_bytes;
             trace!("wr pos_in_ext_file: {}", pos_in_ext_file);
 
-            if pos_in_ext_file < ExtFileBlock::capacity() {
+            if pos_in_ext_file < FileBlockExt::capacity() {
                 ironfs.write_ext_file_block(&ext_file_block_inode_id, &ext_file_block)?;
             } else {
                 debug!("We've reached end of ext file block and need to carve a new block.");
@@ -289,7 +289,7 @@ impl File {
                         "Acquired new ext file block inode id: {:x}",
                         new_ext_file_block_inode_id.0
                     );
-                    let new_ext_file_block = ExtFileBlock::default();
+                    let new_ext_file_block = FileBlockExt::default();
                     ext_file_block.next_inode = new_ext_file_block_inode_id;
                     ironfs.write_ext_file_block(&ext_file_block_inode_id, &ext_file_block)?;
                     ext_file_block_inode_id = new_ext_file_block_inode_id;
@@ -385,7 +385,7 @@ mod tests {
                 info!(
                     "inspecting FileBlock.capacity: {} ExtFileBlock.capacity: {} section: {} to {}",
                     FileBlock::capacity(),
-                    ExtFileBlock::capacity(),
+                    FileBlockExt::capacity(),
                     prev,
                     i
                 );
@@ -412,7 +412,7 @@ mod tests {
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let mut file = File::create(&mut ironfs, "big_file", 0, 0, 0).unwrap();
-        let starting_pos = FileBlock::capacity() + ExtFileBlock::capacity() - 2;
+        let starting_pos = FileBlock::capacity() + FileBlockExt::capacity() - 2;
 
         info!("Writing small amount of data in small increments.");
         let mut pos = starting_pos;
@@ -440,7 +440,7 @@ mod tests {
                 info!(
                     "inspecting FileBlock.capacity: {} ExtFileBlock.capacity: {} section: {} to {}",
                     FileBlock::capacity(),
-                    ExtFileBlock::capacity(),
+                    FileBlockExt::capacity(),
                     prev,
                     i
                 );

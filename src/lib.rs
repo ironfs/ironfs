@@ -12,7 +12,7 @@ mod util;
 
 use data_block::DataBlock;
 pub use error::ErrorKind;
-use ext_file_block::ExtFileBlock;
+use ext_file_block::FileBlockExt;
 use file::File;
 use file_block::FileBlock;
 pub use storage::{Geometry, LbaId, Storage};
@@ -41,10 +41,10 @@ const LBA_SIZE: usize = 512;
 enum BlockMagicType {
     DataBlock,
     FileBlock,
-    ExtFileBlock,
+    FileBlockExt,
     SuperBlock,
-    DirInode,
-    DirInodeExt,
+    DirBlock,
+    DirBlockExt,
     FreeBlock,
 }
 
@@ -74,7 +74,7 @@ const DIR_BLOCK_NUM_ENTRIES: usize = 940;
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(C)]
-struct DirInode {
+struct DirBlock {
     magic: BlockMagic,
     crc: Crc,
     next_dir_block: BlockId,
@@ -90,11 +90,11 @@ struct DirInode {
     entries: [BlockId; DIR_BLOCK_NUM_ENTRIES],
 }
 
-impl TryFrom<&[u8]> for DirInode {
+impl TryFrom<&[u8]> for DirBlock {
     type Error = ErrorKind;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let block: Option<LayoutVerified<_, DirInode>> = LayoutVerified::new(bytes);
+        let block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(bytes);
         if let Some(block) = block {
             return Ok((*block).clone());
         }
@@ -104,7 +104,7 @@ impl TryFrom<&[u8]> for DirInode {
     }
 }
 
-impl DirInode {
+impl DirBlock {
     fn fix_crc(&mut self) {
         self.crc = CRC_INIT;
         self.crc = Crc(CRC.checksum(self.as_bytes()));
@@ -120,10 +120,10 @@ impl DirInode {
     }
 }
 
-impl DirInode {
+impl DirBlock {
     fn from_timestamp(now: Timestamp) -> Self {
         // Todo record current time.
-        DirInode {
+        DirBlock {
             magic: DIR_BLOCK_MAGIC,
             crc: CRC_INIT,
             next_dir_block: BLOCK_ID_NULL,
@@ -143,7 +143,7 @@ impl DirInode {
 
 #[derive(AsBytes, FromBytes)]
 #[repr(C)]
-struct DirInodeExt {
+struct DirBlockExt {
     magic: BlockMagic,
     crc: Crc,
     next_dir_block: BlockId,
@@ -208,7 +208,7 @@ impl Iterator for DirectoryListing {
                 let index = self.index;
                 self.index += 1;
 
-                let block: Option<LayoutVerified<_, DirInode>> =
+                let block: Option<LayoutVerified<_, DirBlock>> =
                     LayoutVerified::new(&self.cache[..]);
                 if let Some(block) = block {
                     let id = block.entries[index];
@@ -318,7 +318,7 @@ impl<T: Storage> IronFs<T> {
         self.write_super_block(&super_block)?;
 
         // Write the initial settings for the directory block.
-        let mut dir_block = DirInode::from_timestamp(now);
+        let mut dir_block = DirBlock::from_timestamp(now);
         dir_block.name_len = 1;
         dir_block.name[0] = '/' as u8;
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
@@ -381,8 +381,8 @@ impl<T: Storage> IronFs<T> {
                             error!("file name could not be converted to utf8");
                         }
                     }
-                    Some(BlockMagicType::DirInode) => {
-                        let dir_block = DirInode::try_from(&block[..])
+                    Some(BlockMagicType::DirBlock) => {
+                        let dir_block = DirBlock::try_from(&block[..])
                             .expect("failure to convert bytes to dir block");
                         let dir_name =
                             core::str::from_utf8(&dir_block.name[..dir_block.name_len as usize]);
@@ -459,7 +459,7 @@ impl<T: Storage> IronFs<T> {
         {
             let id = self.acquire_free_block()?;
             trace!("mkdir: using free block: {:?}", id);
-            let mut new_directory_block = DirInode::from_timestamp(now);
+            let mut new_directory_block = DirBlock::from_timestamp(now);
             new_directory_block.name_len = name.len() as u32;
             new_directory_block.name[..name.len()].copy_from_slice(name.as_bytes());
             let new_directory_block_id = DirectoryId(id.0);
@@ -498,9 +498,9 @@ impl<T: Storage> IronFs<T> {
                     perms: file.perms,
                 })
             }
-            Some(BlockMagicType::DirInode) => {
+            Some(BlockMagicType::DirBlock) => {
                 let dir =
-                    DirInode::try_from(&bytes[..]).expect("failure to convert bytes to dir block");
+                    DirBlock::try_from(&bytes[..]).expect("failure to convert bytes to dir block");
                 Ok(Attrs {
                     block_id: *entry,
                     kind: AttrKind::Directory,
@@ -546,8 +546,8 @@ impl<T: Storage> IronFs<T> {
                     return Ok(());
                 }
             }
-            Some(BlockMagicType::DirInode) => {
-                let dir_block: Option<LayoutVerified<_, DirInode>> =
+            Some(BlockMagicType::DirBlock) => {
+                let dir_block: Option<LayoutVerified<_, DirBlock>> =
                     LayoutVerified::new(&bytes[..]);
                 if let Some(dir_block) = dir_block {
                     dir_block.name(name)?;
@@ -566,7 +566,7 @@ impl<T: Storage> IronFs<T> {
 
         match block_magic_type(&block) {
             Some(BlockMagicType::FileBlock) => Ok(AttrKind::File),
-            Some(BlockMagicType::DirInode) => Ok(AttrKind::Directory),
+            Some(BlockMagicType::DirBlock) => Ok(AttrKind::Directory),
             _ => Err(ErrorKind::InconsistentState),
         }
     }
@@ -598,7 +598,7 @@ impl<T: Storage> IronFs<T> {
         DataBlock::try_from(&bytes[..])
     }
 
-    fn read_dir_block(&self, entry: &DirectoryId) -> Result<DirInode, ErrorKind> {
+    fn read_dir_block(&self, entry: &DirectoryId) -> Result<DirBlock, ErrorKind> {
         if BlockId(entry.0) == BLOCK_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
@@ -607,7 +607,7 @@ impl<T: Storage> IronFs<T> {
         let mut bytes = [0u8; BLOCK_SIZE];
         trace!("Read dir block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
-        DirInode::try_from(&bytes[..])
+        DirBlock::try_from(&bytes[..])
     }
 
     fn read_file_block(&self, entry: &FileId) -> Result<FileBlock, ErrorKind> {
@@ -622,7 +622,7 @@ impl<T: Storage> IronFs<T> {
         FileBlock::try_from(&bytes[..])
     }
 
-    fn read_ext_file_block(&self, entry: &BlockId) -> Result<ExtFileBlock, ErrorKind> {
+    fn read_ext_file_block(&self, entry: &BlockId) -> Result<FileBlockExt, ErrorKind> {
         if *entry == BLOCK_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
@@ -631,7 +631,7 @@ impl<T: Storage> IronFs<T> {
         let mut bytes = [0u8; BLOCK_SIZE];
         trace!("Read ext file block: {}", entry.0);
         self.storage.read(lba_id, &mut bytes);
-        ExtFileBlock::try_from(&bytes[..])
+        FileBlockExt::try_from(&bytes[..])
     }
 
     fn read_super_block(&mut self) -> Result<SuperBlock, ErrorKind> {
@@ -674,7 +674,7 @@ impl<T: Storage> IronFs<T> {
     fn write_dir_block(
         &mut self,
         entry: &DirectoryId,
-        directory: &DirInode,
+        directory: &DirBlock,
     ) -> Result<(), ErrorKind> {
         if BlockId(entry.0) == BLOCK_ID_NULL {
             error!("Invalid block ID NULL.");
@@ -702,7 +702,7 @@ impl<T: Storage> IronFs<T> {
     fn write_ext_file_block(
         &mut self,
         entry: &BlockId,
-        ext_file: &ExtFileBlock,
+        ext_file: &FileBlockExt,
     ) -> Result<(), ErrorKind> {
         if *entry == BLOCK_ID_NULL {
             error!("Invalid block ID NULL.");
@@ -900,10 +900,10 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
     match BlockMagic(magic) {
         data_block::DATA_BLOCK_MAGIC => Some(BlockMagicType::DataBlock),
         file_block::FILE_INODE_MAGIC => Some(BlockMagicType::FileBlock),
-        ext_file_block::EXT_FILE_BLOCK_MAGIC => Some(BlockMagicType::ExtFileBlock),
+        ext_file_block::EXT_FILE_BLOCK_MAGIC => Some(BlockMagicType::FileBlockExt),
         SUPER_BLOCK_MAGIC => Some(BlockMagicType::SuperBlock),
-        DIR_BLOCK_MAGIC => Some(BlockMagicType::DirInode),
-        EXT_DIR_BLOCK_MAGIC => Some(BlockMagicType::DirInodeExt),
+        DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlock),
+        EXT_DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlockExt),
         FREE_BLOCK_MAGIC => Some(BlockMagicType::FreeBlock),
         _ => None,
     }
@@ -999,17 +999,17 @@ mod tests {
 
     #[test]
     fn valid_ext_file_block_size() {
-        assert_eq!(core::mem::size_of::<ExtFileBlock>(), BLOCK_SIZE);
+        assert_eq!(core::mem::size_of::<FileBlockExt>(), BLOCK_SIZE);
     }
 
     #[test]
     fn valid_dir_block_size() {
-        assert_eq!(core::mem::size_of::<DirInode>(), BLOCK_SIZE);
+        assert_eq!(core::mem::size_of::<DirBlock>(), BLOCK_SIZE);
     }
 
     #[test]
     fn valid_ext_dir_block_size() {
-        assert_eq!(core::mem::size_of::<DirInodeExt>(), BLOCK_SIZE);
+        assert_eq!(core::mem::size_of::<DirBlockExt>(), BLOCK_SIZE);
     }
 
     #[test]
