@@ -4,17 +4,17 @@
 
 mod data_block;
 mod error;
-mod ext_file_block;
 mod file;
 mod file_block;
+mod file_block_ext;
 mod storage;
 mod util;
 
 use data_block::DataBlock;
 pub use error::ErrorKind;
-use ext_file_block::FileBlockExt;
 use file::File;
 use file_block::FileBlock;
+use file_block_ext::FileBlockExt;
 pub use storage::{Geometry, LbaId, Storage};
 use util::BlockMagic;
 pub use util::Timestamp;
@@ -622,7 +622,7 @@ impl<T: Storage> IronFs<T> {
         FileBlock::try_from(&bytes[..])
     }
 
-    fn read_ext_file_block(&self, entry: &BlockId) -> Result<FileBlockExt, ErrorKind> {
+    fn read_file_block_ext(&self, entry: &BlockId) -> Result<FileBlockExt, ErrorKind> {
         if *entry == BLOCK_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
@@ -699,7 +699,7 @@ impl<T: Storage> IronFs<T> {
         Ok(())
     }
 
-    fn write_ext_file_block(
+    fn write_file_block_ext(
         &mut self,
         entry: &BlockId,
         ext_file: &FileBlockExt,
@@ -900,7 +900,7 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
     match BlockMagic(magic) {
         data_block::DATA_BLOCK_MAGIC => Some(BlockMagicType::DataBlock),
         file_block::FILE_INODE_MAGIC => Some(BlockMagicType::FileBlock),
-        ext_file_block::EXT_FILE_BLOCK_MAGIC => Some(BlockMagicType::FileBlockExt),
+        file_block_ext::FILE_BLOCK_EXT_MAGIC => Some(BlockMagicType::FileBlockExt),
         SUPER_BLOCK_MAGIC => Some(BlockMagicType::SuperBlock),
         DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlock),
         EXT_DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlockExt),
@@ -998,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_ext_file_block_size() {
+    fn valid_file_block_ext_size() {
         assert_eq!(core::mem::size_of::<FileBlockExt>(), BLOCK_SIZE);
     }
 
@@ -1066,7 +1066,7 @@ mod tests {
 
     /*
     #[test]
-    fn test_write_ext_file_block_small_chunks() {
+    fn test_write_file_block_ext_small_chunks() {
             init();
         const NUM_BYTES: usize = 1_000_000;
         let txt = rust_counter_strings::generate(NUM_BYTES);
