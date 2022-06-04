@@ -1,0 +1,92 @@
+use crate::data_block::DataBlock;
+use crate::error::ErrorKind;
+use crate::storage::Storage;
+use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
+use crate::IronFs;
+use log::{debug, error, info, trace};
+use zerocopy::{AsBytes, FromBytes, LayoutVerified};
+
+pub(crate) const DIR_BLOCK_NUM_ENTRIES: usize = 940;
+
+const DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DIRB");
+
+#[derive(Debug, AsBytes, FromBytes, Clone)]
+#[repr(C)]
+pub(crate) struct DirBlock {
+    pub(crate) magic: BlockMagic,
+    pub(crate) crc: Crc,
+    pub(crate) next_dir_block: BlockId,
+    pub(crate) name_len: u32,
+    pub(crate) name: [u8; NAME_NLEN],
+    pub(crate) atime: Timestamp,
+    pub(crate) mtime: Timestamp,
+    pub(crate) ctime: Timestamp,
+    pub(crate) reserved1: u64,
+    pub(crate) owner: u16,
+    pub(crate) group: u16,
+    pub(crate) perms: u32,
+    pub(crate) entries: [BlockId; DIR_BLOCK_NUM_ENTRIES],
+}
+
+impl TryFrom<&[u8]> for DirBlock {
+    type Error = ErrorKind;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        let block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(bytes);
+        if let Some(block) = block {
+            return Ok((*block).clone());
+        }
+
+        error!("Failure to create dirblock from bytes.");
+        return Err(ErrorKind::InconsistentState);
+    }
+}
+
+impl DirBlock {
+    pub(crate) fn fix_crc(&mut self) {
+        self.crc = CRC_INIT;
+        self.crc = Crc(CRC.checksum(self.as_bytes()));
+    }
+
+    pub(crate) fn name(&self, name: &mut [u8]) -> Result<(), ErrorKind> {
+        if name.len() < self.name_len as usize {
+            return Err(ErrorKind::InsufficientSpace);
+        }
+        let name_len = self.name_len as usize;
+        name[..name_len].copy_from_slice(&self.name[..name_len]);
+        Ok(())
+    }
+}
+
+impl DirBlock {
+    pub(crate) fn from_timestamp(now: Timestamp) -> Self {
+        // Todo record current time.
+        DirBlock {
+            magic: DIR_BLOCK_MAGIC,
+            crc: CRC_INIT,
+            next_dir_block: BLOCK_ID_NULL,
+            name_len: 0,
+            name: [0u8; NAME_NLEN],
+            atime: now,
+            mtime: now,
+            ctime: now,
+            owner: 0,
+            group: 0,
+            perms: 0,
+            reserved1: 0,
+            entries: [BLOCK_ID_NULL; DIR_BLOCK_NUM_ENTRIES],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::tests_util::*;
+
+    #[test]
+    fn valid_dir_block_size() {
+        assert_eq!(core::mem::size_of::<DirBlock>(), crate::BLOCK_SIZE);
+    }
+}

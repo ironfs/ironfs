@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), no_std)]
 
 mod data_block;
+mod dir_block;
 mod error;
 mod file;
 mod file_block;
@@ -11,6 +12,7 @@ mod storage;
 mod util;
 
 use data_block::DataBlock;
+use dir_block::{DirBlock, DIR_BLOCK_NUM_ENTRIES};
 pub use error::ErrorKind;
 use file::File;
 use file_block::FileBlock;
@@ -29,7 +31,6 @@ const IRONFS_VERSION: u32 = 0;
 
 const SUPER_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"SUPR");
 const EXT_SUPER_BLOCK_MAGIC: [u8; 12] = *b" BLK IRON FS";
-const DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DIRB");
 const EXT_DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"EDIR");
 const FREE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"FREE");
 
@@ -68,77 +69,6 @@ struct SuperBlock {
     block_size: u32,
     created_on: Timestamp,
     reserved2: [u8; 4040],
-}
-
-const DIR_BLOCK_NUM_ENTRIES: usize = 940;
-
-#[derive(Debug, AsBytes, FromBytes, Clone)]
-#[repr(C)]
-struct DirBlock {
-    magic: BlockMagic,
-    crc: Crc,
-    next_dir_block: BlockId,
-    name_len: u32,
-    name: [u8; NAME_NLEN],
-    atime: Timestamp,
-    mtime: Timestamp,
-    ctime: Timestamp,
-    reserved1: u64,
-    owner: u16,
-    group: u16,
-    perms: u32,
-    entries: [BlockId; DIR_BLOCK_NUM_ENTRIES],
-}
-
-impl TryFrom<&[u8]> for DirBlock {
-    type Error = ErrorKind;
-
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(bytes);
-        if let Some(block) = block {
-            return Ok((*block).clone());
-        }
-
-        error!("Failure to create dirblock from bytes.");
-        return Err(ErrorKind::InconsistentState);
-    }
-}
-
-impl DirBlock {
-    fn fix_crc(&mut self) {
-        self.crc = CRC_INIT;
-        self.crc = Crc(CRC.checksum(self.as_bytes()));
-    }
-
-    pub(crate) fn name(&self, name: &mut [u8]) -> Result<(), ErrorKind> {
-        if name.len() < self.name_len as usize {
-            return Err(ErrorKind::InsufficientSpace);
-        }
-        let name_len = self.name_len as usize;
-        name[..name_len].copy_from_slice(&self.name[..name_len]);
-        Ok(())
-    }
-}
-
-impl DirBlock {
-    fn from_timestamp(now: Timestamp) -> Self {
-        // Todo record current time.
-        DirBlock {
-            magic: DIR_BLOCK_MAGIC,
-            crc: CRC_INIT,
-            next_dir_block: BLOCK_ID_NULL,
-            name_len: 0,
-            name: [0u8; NAME_NLEN],
-            atime: now,
-            mtime: now,
-            ctime: now,
-            owner: 0,
-            group: 0,
-            perms: 0,
-            reserved1: 0,
-            entries: [BLOCK_ID_NULL; DIR_BLOCK_NUM_ENTRIES],
-        }
-    }
 }
 
 #[derive(AsBytes, FromBytes)]
@@ -1000,11 +930,6 @@ mod tests {
     #[test]
     fn valid_file_block_ext_size() {
         assert_eq!(core::mem::size_of::<FileBlockExt>(), BLOCK_SIZE);
-    }
-
-    #[test]
-    fn valid_dir_block_size() {
-        assert_eq!(core::mem::size_of::<DirBlock>(), BLOCK_SIZE);
     }
 
     #[test]
