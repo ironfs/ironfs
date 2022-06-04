@@ -71,16 +71,6 @@ struct SuperBlock {
     reserved2: [u8; 4040],
 }
 
-#[derive(AsBytes, FromBytes)]
-#[repr(C)]
-struct DirBlockExt {
-    magic: BlockMagic,
-    crc: Crc,
-    next_dir_block: BlockId,
-    reserved: u32,
-    data: [BlockId; 1020],
-}
-
 #[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(C)]
 struct FreeBlock {
@@ -930,11 +920,6 @@ mod tests {
     #[test]
     fn valid_file_block_ext_size() {
         assert_eq!(core::mem::size_of::<FileBlockExt>(), BLOCK_SIZE);
-    }
-
-    #[test]
-    fn valid_ext_dir_block_size() {
-        assert_eq!(core::mem::size_of::<DirBlockExt>(), BLOCK_SIZE);
     }
 
     #[test]
