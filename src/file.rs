@@ -1,5 +1,5 @@
 use crate::{
-    file_block_ext::FileBlockExt, util::BLOCK_ID_NULL, BlockId, ErrorKind, FileBlock, FileId,
+    file_block_ext::FileBlockExt, util::FILE_ID_NULL, BlockId, ErrorKind, FileBlock, FileId,
     IronFs, Storage, Timestamp,
 };
 use log::{debug, info, trace};
@@ -52,14 +52,14 @@ impl File {
         file_block.unlink_data(ironfs)?;
 
         // Now release all ext file blocks and data blocks associated with the file.
-        let mut ext_file_id: BlockId = file_block.next_inode.into();
+        let mut ext_file_id = file_block.next_file_block;
         ironfs.release_block(self.top_inode.into())?;
-        while ext_file_id != BLOCK_ID_NULL {
+        while ext_file_id != FILE_ID_NULL {
             let file_block_ext = ironfs.read_file_block_ext(&ext_file_id.into())?;
             file_block_ext.unlink_data(ironfs)?;
             let orig_ext_file_id = ext_file_id;
-            ext_file_id = file_block_ext.next_inode;
-            ironfs.release_block(orig_ext_file_id)?;
+            ext_file_id = file_block_ext.next_block_id;
+            ironfs.release_block(orig_ext_file_id.into())?;
         }
 
         Ok(())
@@ -99,24 +99,24 @@ impl File {
 
         // Navigate forward through the ext file blocks until we find the one we're writing into.
         let end_idx: usize = (file_pos - FileBlock::capacity()) / FileBlockExt::capacity();
-        let mut file_block_ext_inode_id = file_block.next_inode;
-        let mut file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id)?;
+        let mut file_block_ext_inode_id = file_block.next_file_block;
+        let mut file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?;
         for i in 0..end_idx {
             // Iterate through the ext file inode to find the one at our expected index.
-            file_block_ext_inode_id = file_block_ext.next_inode;
-            assert_ne!(file_block_ext_inode_id, BLOCK_ID_NULL);
+            file_block_ext_inode_id = file_block_ext.next_block_id;
+            assert_ne!(file_block_ext_inode_id, FILE_ID_NULL);
             trace!(
                 "rd read block idx: {} id: 0x{:x}",
                 i,
                 file_block_ext_inode_id.0
             );
-            file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id)?;
+            file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?;
         }
         let mut file_block_ext_idx = end_idx;
 
         // We're now reading data from the extended file inode area.
         while file_pos < file_size && data_pos < data.len() {
-            assert_ne!(file_block_ext_inode_id, BLOCK_ID_NULL);
+            assert_ne!(file_block_ext_inode_id, FILE_ID_NULL);
 
             let mut pos_in_ext_file =
                 file_pos - FileBlock::capacity() - (file_block_ext_idx * FileBlockExt::capacity());
@@ -138,11 +138,11 @@ impl File {
             trace!("rd pos_in_ext_file: {}", pos_in_ext_file);
 
             if file_pos != file_size {
-                file_block_ext_inode_id = file_block_ext.next_inode;
+                file_block_ext_inode_id = file_block_ext.next_block_id;
                 trace!("rd read block id: {:?}", file_block_ext_inode_id);
-                assert_ne!(file_block_ext_inode_id, BLOCK_ID_NULL);
+                assert_ne!(file_block_ext_inode_id, FILE_ID_NULL);
 
-                file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id)?;
+                file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?;
                 file_block_ext_idx += 1;
                 trace!(
                     "rd nxt inode: {} file_block_ext_idx: {}",
@@ -208,25 +208,25 @@ impl File {
         // Navigate through existing ext file inode blocks loading each successive id until we
         // reach the place where we intend to read data.
         let end_idx: usize = (file_pos - FileBlock::capacity()) / FileBlockExt::capacity();
-        let mut file_block_ext_inode_id = file_block.next_inode;
-        let mut file_block_ext = if file_block.next_inode == BLOCK_ID_NULL {
-            file_block_ext_inode_id = ironfs.acquire_free_block()?;
+        let mut file_block_ext_inode_id = file_block.next_file_block;
+        let mut file_block_ext = if file_block.next_file_block == FILE_ID_NULL {
+            file_block_ext_inode_id = FileId(ironfs.acquire_free_block()?.0);
             debug!(
                 "Acquired free block for ext file block: {:?}",
                 file_block_ext_inode_id
             );
-            file_block.next_inode = file_block_ext_inode_id;
+            file_block.next_file_block = file_block_ext_inode_id;
             ironfs.write_file_block(&self.top_inode, &file_block)?;
             trace!("Created new ext block: {:?}", file_block_ext_inode_id);
             FileBlockExt::default()
         } else {
             trace!("Read existing ext block: {:?}", file_block_ext_inode_id);
-            ironfs.read_file_block_ext(&file_block_ext_inode_id)?
+            ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?
         };
         for i in 0..end_idx {
             trace!("Navigating forward through ext file block: {}", i);
             // Iterate through the ext file inode to find the one at our expected index.
-            file_block_ext_inode_id = file_block_ext.next_inode;
+            file_block_ext_inode_id = file_block_ext.next_block_id;
             // Its possible that user is trying to write data into file offset far past the place
             // where existing data lives. We need to create new file_block_ext for this case.
             trace!(
@@ -234,14 +234,14 @@ impl File {
                 i,
                 file_block_ext_inode_id.0
             );
-            if file_block_ext_inode_id == BLOCK_ID_NULL {
-                let new_file_block_ext_inode_id = ironfs.acquire_free_block()?;
+            if file_block_ext_inode_id == FILE_ID_NULL {
+                let new_file_block_ext_inode_id = FileId(ironfs.acquire_free_block()?.0);
                 debug!(
                     "Acquired free block for new ext file block: {:?}",
                     new_file_block_ext_inode_id
                 );
                 let new_file_block_ext = FileBlockExt::default();
-                file_block_ext.next_inode = new_file_block_ext_inode_id;
+                file_block_ext.next_block_id = new_file_block_ext_inode_id;
                 ironfs.write_file_block_ext(&file_block_ext_inode_id, &file_block_ext)?;
                 file_block_ext_inode_id = new_file_block_ext_inode_id;
                 file_block_ext = new_file_block_ext;
@@ -252,7 +252,7 @@ impl File {
         let mut file_block_ext_idx = end_idx;
 
         while data_pos < data.len() {
-            assert_ne!(file_block_ext_inode_id, BLOCK_ID_NULL);
+            assert_ne!(file_block_ext_inode_id, FILE_ID_NULL);
 
             let mut pos_in_ext_file = (file_pos - FileBlock::capacity()) % FileBlockExt::capacity();
             trace!(
@@ -283,14 +283,14 @@ impl File {
             } else {
                 debug!("We've reached end of ext file block and need to carve a new block.");
                 trace!("wr read block id: {:x?}", file_block_ext_inode_id);
-                if file_block_ext.next_inode == BLOCK_ID_NULL {
-                    let new_file_block_ext_inode_id = ironfs.acquire_free_block()?;
+                if file_block_ext.next_block_id == FILE_ID_NULL {
+                    let new_file_block_ext_inode_id = FileId(ironfs.acquire_free_block()?.0);
                     debug!(
                         "Acquired new ext file block inode id: {:x}",
                         new_file_block_ext_inode_id.0
                     );
                     let new_file_block_ext = FileBlockExt::default();
-                    file_block_ext.next_inode = new_file_block_ext_inode_id;
+                    file_block_ext.next_block_id = new_file_block_ext_inode_id;
                     ironfs.write_file_block_ext(&file_block_ext_inode_id, &file_block_ext)?;
                     file_block_ext_inode_id = new_file_block_ext_inode_id;
                     file_block_ext = new_file_block_ext;

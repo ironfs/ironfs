@@ -16,6 +16,27 @@ pub(crate) const CRC: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
 #[repr(C)]
 pub struct BlockId(pub u32);
 
+#[derive(Debug, AsBytes, FromBytes, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct DirectoryId(pub u32);
+
+impl From<DirectoryId> for BlockId {
+    fn from(dir_id: DirectoryId) -> Self {
+        BlockId(dir_id.0)
+    }
+}
+#[derive(Debug, AsBytes, FromBytes, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct FileId(pub u32);
+
+impl From<FileId> for BlockId {
+    fn from(file_id: FileId) -> Self {
+        BlockId(file_id.0)
+    }
+}
+
+pub(crate) const DIR_ID_NULL: DirectoryId = DirectoryId(0xFFFFFFFF);
+pub(crate) const FILE_ID_NULL: FileId = FileId(0xFFFFFFFF);
 pub(crate) const BLOCK_ID_NULL: BlockId = BlockId(0xFFFFFFFF);
 
 /// Maximum number of characters for directory or file name.

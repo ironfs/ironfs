@@ -1,12 +1,15 @@
 use crate::data_block::DataBlock;
 use crate::error::ErrorKind;
 use crate::storage::Storage;
-use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
+use crate::util::{
+    BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, FILE_ID_NULL, NAME_NLEN,
+};
+use crate::FileId;
 use crate::IronFs;
 use log::{debug, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
-pub(crate) const FILE_INODE_MAGIC: BlockMagic = BlockMagic(*b"INOD");
+pub(crate) const FILE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"FILE");
 
 const NUM_BYTES_INITIAL_CONTENTS: usize = 1024;
 
@@ -17,7 +20,7 @@ const NUM_DATA_BLOCKS_IN_FILE: usize = 684;
 pub(crate) struct FileBlock {
     magic: BlockMagic,
     crc: Crc,
-    pub(crate) next_inode: BlockId,
+    pub(crate) next_file_block: FileId,
     pub(crate) name_len: u32,
     pub(crate) name: [u8; NAME_NLEN],
     pub(crate) atime: Timestamp,
@@ -35,9 +38,9 @@ impl Default for FileBlock {
     fn default() -> Self {
         let zero_time = Timestamp { secs: 0, nsecs: 0 };
         FileBlock {
-            magic: FILE_INODE_MAGIC,
+            magic: FILE_BLOCK_MAGIC,
             crc: CRC_INIT,
-            next_inode: BLOCK_ID_NULL,
+            next_file_block: FILE_ID_NULL,
             name_len: 0,
             name: [0u8; NAME_NLEN],
             atime: zero_time,
@@ -208,7 +211,7 @@ impl TryFrom<&[u8]> for FileBlock {
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let file_block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(&bytes[..]);
         if let Some(file_block) = file_block {
-            if file_block.magic != FILE_INODE_MAGIC {
+            if file_block.magic != FILE_BLOCK_MAGIC {
                 return Err(ErrorKind::InconsistentState);
             }
 
@@ -247,7 +250,7 @@ impl FileBlock {
 
 #[cfg(test)]
 mod tests {
-use log::{debug, info, trace};
+    use log::{debug, info, trace};
 
     use super::*;
     use crate::tests_util::*;

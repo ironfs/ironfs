@@ -4,6 +4,7 @@
 
 mod data_block;
 mod dir_block;
+mod dir_block_ext;
 mod error;
 mod file;
 mod file_block;
@@ -13,6 +14,7 @@ mod util;
 
 use data_block::DataBlock;
 use dir_block::{DirBlock, DIR_BLOCK_NUM_ENTRIES};
+use dir_block_ext::DirBlockExt;
 pub use error::ErrorKind;
 use file::File;
 use file_block::FileBlock;
@@ -20,9 +22,9 @@ use file_block_ext::FileBlockExt;
 pub use storage::{Geometry, LbaId, Storage};
 use util::BlockMagic;
 pub use util::Timestamp;
-use util::BLOCK_ID_NULL;
-pub use util::{BlockId, NAME_NLEN};
+pub use util::{BlockId, DirectoryId, FileId, NAME_NLEN};
 use util::{Crc, CRC, CRC_INIT};
+use util::{BLOCK_ID_NULL, DIR_ID_NULL, FILE_ID_NULL};
 
 use log::{debug, error, info, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
@@ -93,23 +95,6 @@ pub struct IronFs<T: Storage> {
     is_formatted: bool,
     /// Routine that yields current time.
     get_now_timestamp: fn() -> Timestamp,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct DirectoryId(pub u32);
-
-impl From<DirectoryId> for BlockId {
-    fn from(dir_id: DirectoryId) -> Self {
-        BlockId(dir_id.0)
-    }
-}
-#[derive(Debug, Clone, Copy)]
-pub struct FileId(pub u32);
-
-impl From<FileId> for BlockId {
-    fn from(file_id: FileId) -> Self {
-        BlockId(file_id.0)
-    }
 }
 
 pub struct DirectoryListing {
@@ -367,35 +352,75 @@ impl<T: Storage> IronFs<T> {
         name: &str,
         now: Timestamp,
     ) -> Result<DirectoryId, ErrorKind> {
+        trace!("mkdir: create a new directory block");
+        let id = self.acquire_free_block()?;
+        let new_directory_id = DirectoryId(id.0);
+        trace!("mkdir: using free block: {:?}", id);
+        let mut new_directory_block = DirBlock::from_timestamp(now);
+        new_directory_block.name_len = name.len() as u32;
+        new_directory_block.name[..name.len()].copy_from_slice(name.as_bytes());
+        let new_directory_block_id = DirectoryId(id.0);
+        new_directory_block.fix_crc();
+        self.write_dir_block(&new_directory_block_id, &new_directory_block)?;
+        trace!("mkdir: wrote new directory");
+
         // TODO handle directory already exists.
         // TODO handle permissions.
+
         let mut existing_directory = self.read_dir_block(dir_id)?;
         trace!("mkdir: read existing directory");
+
         // Find existing slot for new directory to be added.
-        if let Some(v) = existing_directory
-            .entries
-            .iter_mut()
-            .find(|v| **v == BLOCK_ID_NULL)
-        {
-            let id = self.acquire_free_block()?;
-            trace!("mkdir: using free block: {:?}", id);
-            let mut new_directory_block = DirBlock::from_timestamp(now);
-            new_directory_block.name_len = name.len() as u32;
-            new_directory_block.name[..name.len()].copy_from_slice(name.as_bytes());
-            let new_directory_block_id = DirectoryId(id.0);
-            new_directory_block.fix_crc();
-            self.write_dir_block(&new_directory_block_id, &new_directory_block)?;
-            trace!("mkdir: wrote new directory");
-            *v = BlockId(id.0);
+        if existing_directory.has_empty_slot() {
+            existing_directory.add_entry(id);
             existing_directory.mtime = now;
             existing_directory.fix_crc();
             self.write_dir_block(&dir_id, &existing_directory)?;
             trace!("mkdir: wrote existing directory");
-            return Ok(new_directory_block_id);
         } else {
-            // TODO handle creating a new ext directory.
-            Err(ErrorKind::NoEntry)
+            // Look through ext dir block hunting for available entries.
+            let mut next_dir_block = existing_directory.next_dir_block;
+            if next_dir_block == DIR_ID_NULL {
+                // We have to create a ext dir block.
+                next_dir_block = DirectoryId(self.acquire_free_block()?.0);
+                existing_directory.next_dir_block = next_dir_block;
+                existing_directory.fix_crc();
+                self.write_dir_block(dir_id, &existing_directory)?;
+            }
+
+            let ext_dir_block_id = next_dir_block;
+            let mut ext_dir_block = self
+                .read_dir_block_ext(&next_dir_block)
+                .unwrap_or(DirBlockExt::default());
+            loop {
+                if ext_dir_block.has_empty_slot() {
+                    ext_dir_block.add_entry(id)?;
+                    existing_directory.mtime = now;
+                    existing_directory.fix_crc();
+                    self.write_dir_block(&dir_id, &existing_directory)?;
+                    self.write_dir_block_ext(&ext_dir_block_id, &ext_dir_block)?;
+                    trace!(
+                        "mkdir: wrote id: {:?} into ext_dir_block: {:?}",
+                        new_directory_id,
+                        ext_dir_block_id
+                    );
+                    break;
+                } else {
+                    next_dir_block = ext_dir_block.next_dir_block;
+                    if next_dir_block == DIR_ID_NULL {
+                        // We have to create a ext dir block.
+                        next_dir_block = DirectoryId(self.acquire_free_block()?.0);
+                        ext_dir_block.next_dir_block = next_dir_block;
+                        ext_dir_block.fix_crc();
+                        self.write_dir_block_ext(&ext_dir_block_id, &ext_dir_block)?;
+                        ext_dir_block = DirBlockExt::default();
+                    } else {
+                        ext_dir_block = self.read_dir_block_ext(&next_dir_block)?;
+                    }
+                }
+            }
         }
+        return Ok(new_directory_id);
     }
 
     pub fn attrs(&self, entry: &BlockId) -> Result<Attrs, ErrorKind> {
@@ -530,8 +555,20 @@ impl<T: Storage> IronFs<T> {
         DirBlock::try_from(&bytes[..])
     }
 
+    fn read_dir_block_ext(&self, entry: &DirectoryId) -> Result<DirBlockExt, ErrorKind> {
+        if *entry == DIR_ID_NULL {
+            error!("Invalid block ID NULL.");
+            return Err(ErrorKind::InconsistentState);
+        }
+        let lba_id = self.id_to_lba(entry.0);
+        let mut bytes = [0u8; BLOCK_SIZE];
+        trace!("Read ext dir block: {}", entry.0);
+        self.storage.read(lba_id, &mut bytes);
+        DirBlockExt::try_from(&bytes[..])
+    }
+
     fn read_file_block(&self, entry: &FileId) -> Result<FileBlock, ErrorKind> {
-        if BlockId(entry.0) == BLOCK_ID_NULL {
+        if *entry == FILE_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
         }
@@ -542,8 +579,8 @@ impl<T: Storage> IronFs<T> {
         FileBlock::try_from(&bytes[..])
     }
 
-    fn read_file_block_ext(&self, entry: &BlockId) -> Result<FileBlockExt, ErrorKind> {
-        if *entry == BLOCK_ID_NULL {
+    fn read_file_block_ext(&self, entry: &FileId) -> Result<FileBlockExt, ErrorKind> {
+        if *entry == FILE_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
         }
@@ -596,7 +633,23 @@ impl<T: Storage> IronFs<T> {
         entry: &DirectoryId,
         directory: &DirBlock,
     ) -> Result<(), ErrorKind> {
-        if BlockId(entry.0) == BLOCK_ID_NULL {
+        if *entry == DIR_ID_NULL {
+            error!("Invalid block ID NULL.");
+            return Err(ErrorKind::InconsistentState);
+        }
+        let lba_id = self.id_to_lba(entry.0);
+        let bytes = directory.as_bytes();
+        debug!("Write dir block");
+        self.storage.write(lba_id, &bytes);
+        Ok(())
+    }
+
+    fn write_dir_block_ext(
+        &mut self,
+        entry: &DirectoryId,
+        directory: &DirBlockExt,
+    ) -> Result<(), ErrorKind> {
+        if *entry == DIR_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
         }
@@ -608,7 +661,7 @@ impl<T: Storage> IronFs<T> {
     }
 
     fn write_file_block(&mut self, entry: &FileId, file: &FileBlock) -> Result<(), ErrorKind> {
-        if BlockId(entry.0) == BLOCK_ID_NULL {
+        if *entry == FILE_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
         }
@@ -621,10 +674,10 @@ impl<T: Storage> IronFs<T> {
 
     fn write_file_block_ext(
         &mut self,
-        entry: &BlockId,
+        entry: &FileId,
         ext_file: &FileBlockExt,
     ) -> Result<(), ErrorKind> {
-        if *entry == BLOCK_ID_NULL {
+        if *entry == FILE_ID_NULL {
             error!("Invalid block ID NULL.");
             return Err(ErrorKind::InconsistentState);
         }
@@ -819,7 +872,7 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
     magic.clone_from_slice(&bytes[0..4]);
     match BlockMagic(magic) {
         data_block::DATA_BLOCK_MAGIC => Some(BlockMagicType::DataBlock),
-        file_block::FILE_INODE_MAGIC => Some(BlockMagicType::FileBlock),
+        file_block::FILE_BLOCK_MAGIC => Some(BlockMagicType::FileBlock),
         file_block_ext::FILE_BLOCK_EXT_MAGIC => Some(BlockMagicType::FileBlockExt),
         SUPER_BLOCK_MAGIC => Some(BlockMagicType::SuperBlock),
         DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlock),

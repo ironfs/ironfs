@@ -1,7 +1,10 @@
 use crate::data_block::DataBlock;
 use crate::error::ErrorKind;
 use crate::storage::Storage;
-use crate::util::{BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, NAME_NLEN};
+use crate::util::{
+    BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, DIR_ID_NULL, NAME_NLEN,
+};
+use crate::DirectoryId;
 use crate::IronFs;
 use log::{debug, error, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
@@ -15,7 +18,7 @@ const DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DIRB");
 pub(crate) struct DirBlock {
     pub(crate) magic: BlockMagic,
     pub(crate) crc: Crc,
-    pub(crate) next_dir_block: BlockId,
+    pub(crate) next_dir_block: DirectoryId,
     pub(crate) name_len: u32,
     pub(crate) name: [u8; NAME_NLEN],
     pub(crate) atime: Timestamp,
@@ -64,7 +67,7 @@ impl DirBlock {
         DirBlock {
             magic: DIR_BLOCK_MAGIC,
             crc: CRC_INIT,
-            next_dir_block: BLOCK_ID_NULL,
+            next_dir_block: DIR_ID_NULL,
             name_len: 0,
             name: [0u8; NAME_NLEN],
             atime: now,
@@ -75,6 +78,21 @@ impl DirBlock {
             perms: 0,
             reserved1: 0,
             entries: [BLOCK_ID_NULL; DIR_BLOCK_NUM_ENTRIES],
+        }
+    }
+
+    /// Return true if any empty slot exists in this directory entries.
+    pub(crate) fn has_empty_slot(&self) -> bool {
+        self.entries.iter().any(|x| *x == BLOCK_ID_NULL)
+    }
+
+    /// Add an entry to the directory block.
+    pub(crate) fn add_entry(&mut self, entry_block_id: BlockId) -> Result<(), ErrorKind> {
+        if let Some(v) = self.entries.iter_mut().find(|v| **v == BLOCK_ID_NULL) {
+            *v = BlockId(entry_block_id.0);
+            Ok(())
+        } else {
+            Err(ErrorKind::NoEntry)
         }
     }
 }

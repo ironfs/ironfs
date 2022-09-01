@@ -1,12 +1,13 @@
 use crate::data_block::DataBlock;
 use crate::error::ErrorKind;
 use crate::storage::Storage;
-use crate::util::{BlockId, BlockMagic, Crc, BLOCK_ID_NULL, CRC, CRC_INIT};
+use crate::util::{BlockId, BlockMagic, Crc, BLOCK_ID_NULL, CRC, CRC_INIT, FILE_ID_NULL};
+use crate::FileId;
 use crate::IronFs;
 use log::{debug, error, info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
-pub(crate) const FILE_BLOCK_EXT_MAGIC: BlockMagic = BlockMagic(*b"EINO");
+pub(crate) const FILE_BLOCK_EXT_MAGIC: BlockMagic = BlockMagic(*b"EFLE");
 
 const FILE_BLOCK_EXT_NUM_BLOCKS: usize = 1020;
 
@@ -15,7 +16,7 @@ const FILE_BLOCK_EXT_NUM_BLOCKS: usize = 1020;
 pub(crate) struct FileBlockExt {
     magic: BlockMagic,
     crc: Crc,
-    pub(crate) next_inode: BlockId,
+    pub(crate) next_block_id: FileId,
     reserved: u32,
     blocks: [BlockId; FILE_BLOCK_EXT_NUM_BLOCKS],
 }
@@ -157,7 +158,7 @@ impl Default for FileBlockExt {
         FileBlockExt {
             magic: FILE_BLOCK_EXT_MAGIC,
             crc: CRC_INIT,
-            next_inode: BLOCK_ID_NULL,
+            next_block_id: FILE_ID_NULL,
             reserved: 0,
             blocks: [BLOCK_ID_NULL; FILE_BLOCK_EXT_NUM_BLOCKS],
         }
