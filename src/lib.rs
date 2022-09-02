@@ -1023,6 +1023,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_mkdirs() {
+        init();
+
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
+        let root_dir = DirectoryId(1);
+        ironfs.mkdir(&root_dir, "foo", current_timestamp()).unwrap();
+        ironfs.mkdir(&root_dir, "bar", current_timestamp()).unwrap();
+        ironfs.mkdir(&root_dir, "baz", current_timestamp()).unwrap();
+        ironfs
+            .mkdir(&root_dir, "ping", current_timestamp())
+            .unwrap();
+        ironfs
+            .mkdir(&root_dir, "pong", current_timestamp())
+            .unwrap();
+        ironfs
+            .mkdir(&root_dir, "pogo", current_timestamp())
+            .unwrap();
+    }
+
+    /*
+    #[test]
+    fn test_mkdirs_thousands() {
+        init();
+
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
+        let root_dir = DirectoryId(1);
+        for i in 0..10_000 {
+            let name = format!("dir{}", i);
+            ironfs.mkdir(&root_dir, &name, current_timestamp()).unwrap();
+        }
+    }
+    */
+
     /*
     #[test]
     fn test_write_file_block_ext_small_chunks() {
