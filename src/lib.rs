@@ -107,7 +107,7 @@ impl Iterator for DirectoryListing {
     type Item = BlockId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // TODO handle moving to next
+        // TODO handle moving to ext dir block.
         loop {
             if self.index < DIR_BLOCK_NUM_ENTRIES {
                 let index = self.index;
@@ -373,31 +373,56 @@ impl<T: Storage> IronFs<T> {
             existing_directory.mtime = now;
             existing_directory.fix_crc();
             self.write_dir_block(dir_id, &existing_directory)?;
-            trace!("mkdir: wrote existing directory");
+            debug!(
+                "mkdir: wrote {:?} into existing directory: {:?}",
+                id, dir_id
+            );
         } else {
             // Look through ext dir block hunting for available entries.
             let mut next_dir_block = existing_directory.next_dir_block;
+            let mut ext_dir_block_id = next_dir_block;
             if next_dir_block == DIR_ID_NULL {
+                debug!(
+                    "We had null next dir block in existing directory: {:?}",
+                    dir_id
+                );
                 // We have to create a ext dir block.
                 next_dir_block = DirectoryId(self.acquire_free_block()?.0);
                 existing_directory.next_dir_block = next_dir_block;
                 existing_directory.fix_crc();
                 self.write_dir_block(dir_id, &existing_directory)?;
+                debug!(
+                    "We created next dir block: {:?} for existing directory: {:?}",
+                    next_dir_block, dir_id
+                );
             }
 
-            let ext_dir_block_id = next_dir_block;
-            let mut ext_dir_block = self.read_dir_block_ext(&next_dir_block).unwrap_or_default();
+            let mut ext_dir_block = if ext_dir_block_id == DIR_ID_NULL {
+                ext_dir_block_id = next_dir_block;
+                DirBlockExt::default()
+            } else {
+                ext_dir_block_id = next_dir_block;
+                self.read_dir_block_ext(&ext_dir_block_id)?
+            };
+            debug!("We read ext dir block with id: {:?}", ext_dir_block_id);
+            debug!("ext dir block is: {:?}", ext_dir_block);
+            let mut x = 0;
             loop {
+                x += 1;
+                if x >= 10 {
+                    panic!("Looped too many times.")
+                }
+
                 if ext_dir_block.has_empty_slot() {
                     ext_dir_block.add_entry(id)?;
                     existing_directory.mtime = now;
                     existing_directory.fix_crc();
                     self.write_dir_block(dir_id, &existing_directory)?;
+                    ext_dir_block.fix_crc();
                     self.write_dir_block_ext(&ext_dir_block_id, &ext_dir_block)?;
-                    trace!(
+                    debug!(
                         "mkdir: wrote id: {:?} into ext_dir_block: {:?}",
-                        new_directory_id,
-                        ext_dir_block_id
+                        new_directory_id, ext_dir_block_id
                     );
                     break;
                 } else {
@@ -408,9 +433,16 @@ impl<T: Storage> IronFs<T> {
                         ext_dir_block.next_dir_block = next_dir_block;
                         ext_dir_block.fix_crc();
                         self.write_dir_block_ext(&ext_dir_block_id, &ext_dir_block)?;
+                        debug!(
+                            "Created new dir block: {:?} inside: {:?}",
+                            next_dir_block, ext_dir_block_id
+                        );
                         ext_dir_block = DirBlockExt::default();
+                        ext_dir_block_id = next_dir_block;
                     } else {
+                        debug!("next dir block {:?} was not null", next_dir_block);
                         ext_dir_block = self.read_dir_block_ext(&next_dir_block)?;
+                        ext_dir_block_id = next_dir_block;
                     }
                 }
             }
@@ -1043,19 +1075,17 @@ mod tests {
             .unwrap();
     }
 
-    /*
     #[test]
     fn test_mkdirs_thousands() {
         init();
 
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let root_dir = DirectoryId(1);
-        for i in 0..10_000 {
+        for i in 0..3_000 {
             let name = format!("dir{}", i);
             ironfs.mkdir(&root_dir, &name, current_timestamp()).unwrap();
         }
     }
-    */
 
     /*
     #[test]
