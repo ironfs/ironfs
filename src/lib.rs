@@ -110,6 +110,7 @@ impl Iterator for DirectoryListing {
         // TODO handle moving to ext dir block.
         loop {
             if self.index < DIR_BLOCK_NUM_ENTRIES {
+                // TODO Fix all this.
                 let index = self.index;
                 self.index += 1;
 
@@ -1084,6 +1085,23 @@ mod tests {
         for i in 0..3_000 {
             let name = format!("dir{}", i);
             ironfs.mkdir(&root_dir, &name, current_timestamp()).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_readdir_thousands() {
+        init();
+
+        let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
+        let root_dir = DirectoryId(1);
+        for i in 0..3_000 {
+            let name = format!("dir{}", i);
+            ironfs.mkdir(&root_dir, &name, current_timestamp()).unwrap();
+        }
+
+        let mut listing = ironfs.readdir(root_dir).unwrap();
+        while let Some(item) = listing.next() {
+            println!("{:?}", item);
         }
     }
 
