@@ -1,6 +1,6 @@
 use crate::{
-    file_block_ext::FileBlockExt, util::FILE_ID_NULL, BlockId, ErrorKind, FileBlock, FileId,
-    IronFs, Storage, Timestamp,
+    file_block_ext::FileBlockExt, util::FILE_ID_NULL, ErrorKind, FileBlock, FileId, IronFs,
+    Storage, Timestamp,
 };
 use log::{debug, info, trace};
 
@@ -317,7 +317,6 @@ mod tests {
     use super::*;
     use crate::tests_util::*;
     use log::info;
-    use proptest::strategy::W;
 
     #[test]
     fn test_small_write_across_file_block_boundary() {

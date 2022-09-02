@@ -4,7 +4,7 @@ use crate::storage::Storage;
 use crate::util::{BlockId, BlockMagic, Crc, BLOCK_ID_NULL, CRC, CRC_INIT, FILE_ID_NULL};
 use crate::FileId;
 use crate::IronFs;
-use log::{debug, error, info, trace};
+use log::{debug, error, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const FILE_BLOCK_EXT_MAGIC: BlockMagic = BlockMagic(*b"EFLE");
@@ -168,7 +168,7 @@ impl Default for FileBlockExt {
 #[cfg(test)]
 mod tests {
 
-    use log::{debug, error, info, trace};
+    use log::info;
 
     use super::*;
     use crate::tests_util::*;

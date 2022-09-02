@@ -6,7 +6,7 @@ use crate::util::{
 };
 use crate::FileId;
 use crate::IronFs;
-use log::{debug, info, trace};
+use log::{info, trace};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const FILE_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"FILE");
@@ -250,7 +250,7 @@ impl FileBlock {
 
 #[cfg(test)]
 mod tests {
-    use log::{debug, info, trace};
+    use log::info;
 
     use super::*;
     use crate::tests_util::*;

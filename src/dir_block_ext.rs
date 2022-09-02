@@ -1,12 +1,7 @@
-use crate::data_block::DataBlock;
 use crate::error::ErrorKind;
-use crate::storage::Storage;
-use crate::util::{
-    BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, DIR_ID_NULL, NAME_NLEN,
-};
+use crate::util::{BlockId, BlockMagic, Crc, BLOCK_ID_NULL, CRC, CRC_INIT, DIR_ID_NULL};
 use crate::DirectoryId;
-use crate::IronFs;
-use log::{debug, error, info, trace};
+use log::error;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const DIR_BLOCK_EXT_NUM_ENTRIES: usize = 1020;
@@ -75,7 +70,6 @@ impl DirBlockExt {
 mod tests {
 
     use super::*;
-    use crate::tests_util::*;
 
     #[test]
     fn valid_ext_dir_block_size() {

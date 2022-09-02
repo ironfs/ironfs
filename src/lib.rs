@@ -26,7 +26,7 @@ pub use util::{BlockId, DirectoryId, FileId, NAME_NLEN};
 use util::{Crc, CRC, CRC_INIT};
 use util::{BLOCK_ID_NULL, DIR_ID_NULL, FILE_ID_NULL};
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 const IRONFS_VERSION: u32 = 0;
@@ -372,7 +372,7 @@ impl<T: Storage> IronFs<T> {
 
         // Find existing slot for new directory to be added.
         if existing_directory.has_empty_slot() {
-            existing_directory.add_entry(id);
+            existing_directory.add_entry(id)?;
             existing_directory.mtime = now;
             existing_directory.fix_crc();
             self.write_dir_block(&dir_id, &existing_directory)?;
@@ -875,8 +875,8 @@ fn block_magic_type(bytes: &[u8]) -> Option<BlockMagicType> {
         file_block::FILE_BLOCK_MAGIC => Some(BlockMagicType::FileBlock),
         file_block_ext::FILE_BLOCK_EXT_MAGIC => Some(BlockMagicType::FileBlockExt),
         SUPER_BLOCK_MAGIC => Some(BlockMagicType::SuperBlock),
-        DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlock),
-        EXT_DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlockExt),
+        dir_block::DIR_BLOCK_MAGIC => Some(BlockMagicType::DirBlock),
+        dir_block_ext::DIR_BLOCK_EXT_MAGIC => Some(BlockMagicType::DirBlockExt),
         FREE_BLOCK_MAGIC => Some(BlockMagicType::FreeBlock),
         _ => None,
     }
@@ -964,6 +964,7 @@ mod tests {
 
     use super::*;
     use crate::tests_util::*;
+    use log::info;
 
     #[test]
     fn valid_file_block_size() {

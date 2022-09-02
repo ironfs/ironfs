@@ -1,17 +1,14 @@
-use crate::data_block::DataBlock;
 use crate::error::ErrorKind;
-use crate::storage::Storage;
 use crate::util::{
     BlockId, BlockMagic, Crc, Timestamp, BLOCK_ID_NULL, CRC, CRC_INIT, DIR_ID_NULL, NAME_NLEN,
 };
 use crate::DirectoryId;
-use crate::IronFs;
-use log::{debug, error, info, trace};
+use log::error;
 use zerocopy::{AsBytes, FromBytes, LayoutVerified};
 
 pub(crate) const DIR_BLOCK_NUM_ENTRIES: usize = 940;
 
-const DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DIRB");
+pub(crate) const DIR_BLOCK_MAGIC: BlockMagic = BlockMagic(*b"DIRB");
 
 #[derive(Debug, AsBytes, FromBytes, Clone)]
 #[repr(C)]
@@ -101,7 +98,6 @@ impl DirBlock {
 mod tests {
 
     use super::*;
-    use crate::tests_util::*;
 
     #[test]
     fn valid_dir_block_size() {
