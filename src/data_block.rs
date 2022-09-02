@@ -35,7 +35,7 @@ impl TryFrom<&[u8]> for DataBlock {
         }
 
         error!("Failure to create data block from bytes.");
-        return Err(ErrorKind::InconsistentState);
+        Err(ErrorKind::InconsistentState)
     }
 }
 

@@ -38,7 +38,7 @@ impl TryFrom<&[u8]> for DirBlock {
         }
 
         error!("Failure to create dirblock from bytes.");
-        return Err(ErrorKind::InconsistentState);
+        Err(ErrorKind::InconsistentState)
     }
 }
 

@@ -31,7 +31,7 @@ impl TryFrom<&[u8]> for FileBlockExt {
         }
 
         error!("Failure to create file inode from bytes.");
-        return Err(ErrorKind::InconsistentState);
+        Err(ErrorKind::InconsistentState)
     }
 }
 

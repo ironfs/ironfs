@@ -58,7 +58,7 @@ impl Default for FileBlock {
 
 impl FileBlock {
     pub(crate) const fn capacity() -> usize {
-        return NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity());
+        NUM_BYTES_INITIAL_CONTENTS + (NUM_DATA_BLOCKS_IN_FILE * DataBlock::capacity())
     }
 
     pub(crate) fn fix_crc(&mut self) {
@@ -209,22 +209,22 @@ impl TryFrom<&[u8]> for FileBlock {
     type Error = ErrorKind;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let file_block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(&bytes[..]);
+        let file_block: Option<LayoutVerified<_, FileBlock>> = LayoutVerified::new(bytes);
         if let Some(file_block) = file_block {
             if file_block.magic != FILE_BLOCK_MAGIC {
                 return Err(ErrorKind::InconsistentState);
             }
 
-            return Ok((*file_block).clone());
+            Ok((*file_block).clone())
         } else {
-            return Err(ErrorKind::InconsistentState);
+            Err(ErrorKind::InconsistentState)
         }
     }
 }
 
 impl FileBlock {
     pub(crate) fn new(timestamp: &Timestamp, name: &[u8], perms: u32) -> Self {
-        let timestamp = timestamp.clone();
+        let timestamp = *timestamp;
         let mut file = FileBlock {
             atime: timestamp,
             mtime: timestamp,

@@ -55,7 +55,7 @@ impl File {
         let mut ext_file_id = file_block.next_file_block;
         ironfs.release_block(self.top_inode.into())?;
         while ext_file_id != FILE_ID_NULL {
-            let file_block_ext = ironfs.read_file_block_ext(&ext_file_id.into())?;
+            let file_block_ext = ironfs.read_file_block_ext(&ext_file_id)?;
             file_block_ext.unlink_data(ironfs)?;
             let orig_ext_file_id = ext_file_id;
             ext_file_id = file_block_ext.next_block_id;
@@ -100,7 +100,7 @@ impl File {
         // Navigate forward through the ext file blocks until we find the one we're writing into.
         let end_idx: usize = (file_pos - FileBlock::capacity()) / FileBlockExt::capacity();
         let mut file_block_ext_inode_id = file_block.next_file_block;
-        let mut file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?;
+        let mut file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id)?;
         for i in 0..end_idx {
             // Iterate through the ext file inode to find the one at our expected index.
             file_block_ext_inode_id = file_block_ext.next_block_id;
@@ -110,7 +110,7 @@ impl File {
                 i,
                 file_block_ext_inode_id.0
             );
-            file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?;
+            file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id)?;
         }
         let mut file_block_ext_idx = end_idx;
 
@@ -142,7 +142,7 @@ impl File {
                 trace!("rd read block id: {:?}", file_block_ext_inode_id);
                 assert_ne!(file_block_ext_inode_id, FILE_ID_NULL);
 
-                file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?;
+                file_block_ext = ironfs.read_file_block_ext(&file_block_ext_inode_id)?;
                 file_block_ext_idx += 1;
                 trace!(
                     "rd nxt inode: {} file_block_ext_idx: {}",
@@ -181,7 +181,7 @@ impl File {
 
         if file_pos < FileBlock::capacity() {
             let nbytes = core::cmp::min(data.len(), FileBlock::capacity() - file_pos);
-            let written_bytes = file_block.write(ironfs, offset, &data)?;
+            let written_bytes = file_block.write(ironfs, offset, data)?;
             trace!(
                 "Wrote file data into file block file_pos: {} nbytes: {} written_bytes: {}",
                 file_pos,
@@ -221,7 +221,7 @@ impl File {
             FileBlockExt::default()
         } else {
             trace!("Read existing ext block: {:?}", file_block_ext_inode_id);
-            ironfs.read_file_block_ext(&file_block_ext_inode_id.into())?
+            ironfs.read_file_block_ext(&file_block_ext_inode_id)?
         };
         for i in 0..end_idx {
             trace!("Navigating forward through ext file block: {}", i);

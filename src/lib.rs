@@ -172,7 +172,7 @@ impl<T: Storage> IronFs<T> {
 
     pub fn bind(&mut self) -> Result<(), ErrorKind> {
         debug!("entered bind.");
-        if let Some(super_block) = self.read_super_block().ok() {
+        if let Ok(super_block) = self.read_super_block() {
             if super_block.magic != SUPER_BLOCK_MAGIC {
                 debug!("super block had wrong magic.");
                 return Err(ErrorKind::NotFormatted);
@@ -184,13 +184,10 @@ impl<T: Storage> IronFs<T> {
             for i in 1..super_block.num_blocks {
                 trace!("looking for free block at: {}", i);
                 let block_id = BlockId(i);
-                match self.read_free_block(&block_id) {
-                    Ok(_) => {
-                        debug!("found first free block at: {:?}", block_id);
-                        self.next_free_block_id = block_id;
-                        break;
-                    }
-                    Err(_) => {}
+                if self.read_free_block(&block_id).is_ok() {
+                    debug!("found first free block at: {:?}", block_id);
+                    self.next_free_block_id = block_id;
+                    break;
                 }
             }
         } else {
@@ -225,7 +222,7 @@ impl<T: Storage> IronFs<T> {
         // Write the initial settings for the directory block.
         let mut dir_block = DirBlock::from_timestamp(now);
         dir_block.name_len = 1;
-        dir_block.name[0] = '/' as u8;
+        dir_block.name[0] = b'/';
         dir_block.crc = Crc(CRC.checksum(dir_block.as_bytes()));
         trace!("writing root dir block.");
         self.write_dir_block(&DirectoryId(1), &dir_block)?;
@@ -337,9 +334,9 @@ impl<T: Storage> IronFs<T> {
             *v = BlockId(id.0);
             existing_directory.mtime = now;
             existing_directory.fix_crc();
-            self.write_dir_block(&parent, &existing_directory)?;
+            self.write_dir_block(parent, &existing_directory)?;
             trace!("create: wrote existing directory");
-            return Ok(new_file_block_id);
+            Ok(new_file_block_id)
         } else {
             // TODO handle creating a new ext directory.
             Err(ErrorKind::NoEntry)
@@ -375,7 +372,7 @@ impl<T: Storage> IronFs<T> {
             existing_directory.add_entry(id)?;
             existing_directory.mtime = now;
             existing_directory.fix_crc();
-            self.write_dir_block(&dir_id, &existing_directory)?;
+            self.write_dir_block(dir_id, &existing_directory)?;
             trace!("mkdir: wrote existing directory");
         } else {
             // Look through ext dir block hunting for available entries.
@@ -389,15 +386,13 @@ impl<T: Storage> IronFs<T> {
             }
 
             let ext_dir_block_id = next_dir_block;
-            let mut ext_dir_block = self
-                .read_dir_block_ext(&next_dir_block)
-                .unwrap_or(DirBlockExt::default());
+            let mut ext_dir_block = self.read_dir_block_ext(&next_dir_block).unwrap_or_default();
             loop {
                 if ext_dir_block.has_empty_slot() {
                     ext_dir_block.add_entry(id)?;
                     existing_directory.mtime = now;
                     existing_directory.fix_crc();
-                    self.write_dir_block(&dir_id, &existing_directory)?;
+                    self.write_dir_block(dir_id, &existing_directory)?;
                     self.write_dir_block_ext(&ext_dir_block_id, &ext_dir_block)?;
                     trace!(
                         "mkdir: wrote id: {:?} into ext_dir_block: {:?}",
@@ -420,7 +415,7 @@ impl<T: Storage> IronFs<T> {
                 }
             }
         }
-        return Ok(new_directory_id);
+        Ok(new_directory_id)
     }
 
     pub fn attrs(&self, entry: &BlockId) -> Result<Attrs, ErrorKind> {
@@ -602,17 +597,17 @@ impl<T: Storage> IronFs<T> {
                 return Err(ErrorKind::InconsistentState);
             }
 
-            return Ok((*block).clone());
+            Ok((*block).clone())
         } else {
             warn!("Failed to create verified layout of superblock");
-            return Err(ErrorKind::InconsistentState);
+            Err(ErrorKind::InconsistentState)
         }
     }
 
     fn write_super_block(&mut self, super_block: &SuperBlock) -> Result<(), ErrorKind> {
         let bytes = super_block.as_bytes();
         debug!("Writing super block");
-        self.storage.write(LbaId(0), &bytes);
+        self.storage.write(LbaId(0), bytes);
         Ok(())
     }
 
@@ -624,7 +619,7 @@ impl<T: Storage> IronFs<T> {
         let lba_id = self.id_to_lba(entry.0);
         let bytes = data.as_bytes();
         trace!("Writing data block: {:x?} lba_id: {:x?}", entry, lba_id);
-        self.storage.write(lba_id, &bytes);
+        self.storage.write(lba_id, bytes);
         Ok(())
     }
 
@@ -640,7 +635,7 @@ impl<T: Storage> IronFs<T> {
         let lba_id = self.id_to_lba(entry.0);
         let bytes = directory.as_bytes();
         debug!("Write dir block");
-        self.storage.write(lba_id, &bytes);
+        self.storage.write(lba_id, bytes);
         Ok(())
     }
 
@@ -656,7 +651,7 @@ impl<T: Storage> IronFs<T> {
         let lba_id = self.id_to_lba(entry.0);
         let bytes = directory.as_bytes();
         debug!("Write dir block");
-        self.storage.write(lba_id, &bytes);
+        self.storage.write(lba_id, bytes);
         Ok(())
     }
 
@@ -668,7 +663,7 @@ impl<T: Storage> IronFs<T> {
         let lba_id = self.id_to_lba(entry.0);
         let bytes = file.as_bytes();
         debug!("Write file block");
-        self.storage.write(lba_id, &bytes);
+        self.storage.write(lba_id, bytes);
         Ok(())
     }
 
@@ -688,7 +683,7 @@ impl<T: Storage> IronFs<T> {
             lba_id,
             bytes.len()
         );
-        self.storage.write(lba_id, &bytes);
+        self.storage.write(lba_id, bytes);
         Ok(())
     }
 
@@ -711,9 +706,9 @@ impl<T: Storage> IronFs<T> {
                 return Err(ErrorKind::InconsistentState);
             }
 
-            return Ok((*block).clone());
+            Ok((*block).clone())
         } else {
-            return Err(ErrorKind::InconsistentState);
+            Err(ErrorKind::InconsistentState)
         }
     }
 
@@ -728,7 +723,7 @@ impl<T: Storage> IronFs<T> {
         }
         let lba_id = self.id_to_lba(free_block_id.0);
         let bytes = free_block.as_bytes();
-        self.storage.write(lba_id, &bytes);
+        self.storage.write(lba_id, bytes);
         Ok(())
     }
 
@@ -847,7 +842,7 @@ impl<T: Storage> IronFs<T> {
             *entry = BLOCK_ID_NULL;
             dir_block.mtime = now;
             dir_block.fix_crc();
-            self.write_dir_block(&dir_id, &dir_block)?;
+            self.write_dir_block(dir_id, &dir_block)?;
 
             // Erase all the block_id contents.
             // This neesd to move on to next_inode etc file contents.
