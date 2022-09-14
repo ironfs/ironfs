@@ -14,7 +14,7 @@ mod util;
 
 use data_block::DataBlock;
 use dir_block::{DirBlock, DIR_BLOCK_NUM_ENTRIES};
-use dir_block_ext::DirBlockExt;
+use dir_block_ext::{DirBlockExt, DIR_BLOCK_EXT_NUM_ENTRIES};
 pub use error::ErrorKind;
 use file::File;
 use file_block::FileBlock;
@@ -97,50 +97,91 @@ pub struct IronFs<T: Storage> {
     get_now_timestamp: fn() -> Timestamp,
 }
 
-pub struct DirectoryListing {
-    block_id: DirectoryId,
+pub struct DirectoryListing<'a, T: Storage> {
+    ironfs: &'a IronFs<T>,
+    dir_id: DirectoryId,
     index: usize,
     cache: [u8; BLOCK_SIZE],
 }
 
-impl Iterator for DirectoryListing {
+impl<'a, T: Storage> Iterator for DirectoryListing<'a, T> {
     type Item = BlockId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // TODO handle moving to ext dir block.
-        loop {
-            if self.index < DIR_BLOCK_NUM_ENTRIES {
-                // TODO Fix all this.
-                let index = self.index;
-                self.index += 1;
+        if self.dir_id == DIR_ID_NULL {
+            return None;
+        }
 
-                let block: Option<LayoutVerified<_, DirBlock>> =
-                    LayoutVerified::new(&self.cache[..]);
-                if let Some(block) = block {
-                    let id = block.entries[index];
-                    if id != BLOCK_ID_NULL {
-                        trace!("got entry for {} with id: {:?}", index, id);
-                        return Some(id);
-                    }
-                } else {
-                    #[cfg(debug_assertions)]
-                    panic!("Filesystem is in inconsistent state.");
-                    // TODO re-enable break after panic is removed.
-                    // break;
+        // TODO handle moving to ext dir block.
+        if self.index < DIR_BLOCK_NUM_ENTRIES {
+            let index = self.index;
+
+            let bytes = self.cache.clone();
+            let dir_block: Option<LayoutVerified<_, DirBlock>> = LayoutVerified::new(&bytes[..]);
+            if let Some(dir_block) = dir_block {
+                // Update our local index and potentially read out new data if we're now into the next ext dir block.
+                self.index += 1;
+                if self.index >= DIR_BLOCK_NUM_ENTRIES {
+                    self.dir_id = dir_block.next_dir_block;
+                    self.ironfs
+                        .read_block(&BlockId(self.dir_id.0), &mut self.cache[..])
+                        .expect("Reading ext dir entry block should not have failed");
+                }
+
+                let id = dir_block.entries[index];
+                if id != BLOCK_ID_NULL {
+                    trace!("got entry for {} with id: {:?}", index, id);
+                    return Some(id);
                 }
             } else {
-                break;
+                #[cfg(debug_assertions)]
+                panic!("Filesystem is in inconsistent state.");
+                // TODO re-enable break after panic is removed.
+                // break;
+            }
+        } else {
+            let index = (self.index - DIR_BLOCK_NUM_ENTRIES) % DIR_BLOCK_EXT_NUM_ENTRIES;
+
+            let bytes = self.cache.clone();
+            let ext_dir_block: Option<LayoutVerified<_, DirBlockExt>> =
+                LayoutVerified::new(&bytes[..]);
+            if let Some(ext_dir_block) = ext_dir_block {
+                // Update our local index and potentially read out new data if we're now into the next ext dir block.
+                self.index += 1;
+                if index + 1 >= DIR_BLOCK_EXT_NUM_ENTRIES {
+                    self.dir_id = ext_dir_block.next_dir_block;
+                    self.ironfs
+                        .read_block(&BlockId(self.dir_id.0), &mut self.cache[..])
+                        .expect("Reading ext dir entry block should not have failed");
+                }
+
+                let id = ext_dir_block.entries[index];
+                if id != BLOCK_ID_NULL {
+                    trace!(
+                        "from ext dir block got index {} found block id: {:?}",
+                        index,
+                        id
+                    );
+                    return Some(id);
+                }
+            } else {
+                #[cfg(debug_assertions)]
+                panic!("Filesystem is in inconsistent state.");
+                // TODO re-enable break after panic is removed.
+                // break;
             }
         }
         None
     }
 }
 
+/*
 impl DirectoryListing {
     pub fn get(&self, _name: &str) -> Option<u32> {
         None
     }
 }
+*/
 
 #[derive(Debug)]
 pub enum AttrKind {
@@ -490,15 +531,16 @@ impl<T: Storage> IronFs<T> {
         }
     }
 
-    pub fn readdir(&self, directory_id: DirectoryId) -> Result<DirectoryListing, ErrorKind> {
+    pub fn readdir(&self, directory_id: DirectoryId) -> Result<DirectoryListing<T>, ErrorKind> {
         // TODO handle directory_id being invalid directory.
         trace!("readdir called with id: {:?}", directory_id);
         let mut listing = DirectoryListing {
-            block_id: directory_id,
+            ironfs: self,
+            dir_id: directory_id,
             index: 0,
             cache: [0u8; BLOCK_SIZE],
         };
-        self.read_block(&BlockId(listing.block_id.0), &mut listing.cache[..])?;
+        self.read_block(&BlockId(listing.dir_id.0), &mut listing.cache[..])?;
         Ok(listing)
     }
 
