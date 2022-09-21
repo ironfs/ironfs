@@ -7,4 +7,5 @@ pub enum ErrorKind {
     OutOfSpace,
     NotFormatted,
     OutOfBounds,
+    InvalidParameter,
 }

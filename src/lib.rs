@@ -550,29 +550,36 @@ impl<T: Storage> IronFs<T> {
 
     pub fn block_name<'a>(&'a self, block_id: &BlockId, name: &mut [u8]) -> Result<(), ErrorKind> {
         let mut bytes = [0u8; BLOCK_SIZE];
+        debug!(
+            "Attempting to read out block name for block id: {:?}",
+            block_id
+        );
         self.read_block(block_id, &mut bytes[..])?;
 
         match block_magic_type(&bytes) {
             Some(BlockMagicType::FileBlock) => {
-                let file_block: Option<LayoutVerified<_, FileBlock>> =
-                    LayoutVerified::new(&bytes[..]);
-                if let Some(file_block) = file_block {
-                    file_block.name(name)?;
+                trace!("Block {:?} is file block", block_id);
+                if let Ok(file) = FileBlock::try_from(&bytes[..]) {
+                    name[..file.name_len as usize]
+                        .copy_from_slice(&file.name[..file.name_len as usize]);
                     return Ok(());
+                } else {
+                    return Err(ErrorKind::InconsistentState);
                 }
             }
             Some(BlockMagicType::DirBlock) => {
-                let dir_block: Option<LayoutVerified<_, DirBlock>> =
-                    LayoutVerified::new(&bytes[..]);
-                if let Some(dir_block) = dir_block {
-                    dir_block.name(name)?;
+                trace!("Block {:?} is dir block", block_id);
+                if let Ok(dir) = DirBlock::try_from(&bytes[..]) {
+                    name[..dir.name_len as usize]
+                        .copy_from_slice(&dir.name[..dir.name_len as usize]);
                     return Ok(());
+                } else {
+                    return Err(ErrorKind::InconsistentState);
                 }
-            }
-            _ => return Err(ErrorKind::InconsistentState),
+            } //_ => Err(ErrorKind::InconsistentState),
+            _ => {}
         }
-
-        unreachable!();
+        Err(ErrorKind::InconsistentState)
     }
 
     pub fn block_file_type(&self, block_id: &BlockId) -> Result<AttrKind, ErrorKind> {
@@ -1134,17 +1141,31 @@ mod tests {
     fn test_readdir_thousands() {
         init();
 
+        const NUM_DIRS: usize = 10_000;
+
         let mut ironfs = make_filesystem(RamStorage::new(2_usize.pow(26)));
         let root_dir = DirectoryId(1);
-        for i in 0..3_000 {
+        for i in 0..NUM_DIRS {
             let name = format!("dir{}", i);
             ironfs.mkdir(&root_dir, &name, current_timestamp()).unwrap();
         }
 
         let mut listing = ironfs.readdir(root_dir).unwrap();
+        let mut i = 0;
         while let Some(item) = listing.next() {
             println!("{:?}", item);
+            let mut name = [0u8; NAME_NLEN];
+            ironfs.block_name(&item, &mut name[..]).unwrap();
+            for c in name {
+                print!("{}", c as char);
+                if c == 0 {
+                    break;
+                }
+            }
+            println!("");
+            i += 1;
         }
+        assert_eq!(i, NUM_DIRS);
     }
 
     /*
