@@ -1,7 +1,8 @@
 [package]
 name = "ironfs"
-version = "0.1.0"
+license = "Apache-2.0/MIT"
 authors = ["Brandon Edens <brandonedens@gmail.com>"]
+version = "0.1.0"
 edition = "2021"
 
 [dependencies]
